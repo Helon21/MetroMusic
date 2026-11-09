@@ -4,6 +4,7 @@ import { AlarmClock, AudioLines, Bell, Check, ChevronRight, CircleUser, Database
 import { artistOf, SOURCES } from "../lib/catalog";
 import { AUDIO_PROVIDERS, DEFAULTS, PAGES, PALETTES, type Item, type Page } from "../lib/settingsSchema";
 import { BrandIcon, BrandTile, isBrand, lyricsBrand, SourceIcon } from "../lib/brands";
+import { backend, engine } from "../lib/engine";
 import { iconFor } from "../lib/settingsIcons";
 import { cx, norm } from "../lib/util";
 import { SHORTCUTS } from "../components/Dialogs";
@@ -32,7 +33,7 @@ function runAction(id: string) {
     case "clearHistory": return confirm("Limpar o histórico de escuta?", "Tem certeza de que quer apagar todo o histórico de escuta?", () => { L.clear("history"); toast("Histórico de escuta limpo"); });
     case "clearSearchHistory": return confirm("Limpar o histórico de busca?", "Tem certeza de que quer apagar todo o histórico de busca?", () => { L.clear("searchHistory"); toast("Histórico de busca limpo"); });
     case "clearDownloads": return confirm("Apagar todos os downloads?", "As músicas baixadas deixam de estar disponíveis offline.", () => { L.clear("downloads"); toast("Downloads apagados"); }, "Apagar");
-    case "clearSongCache": return confirm("Limpar o cache de músicas?", "Tem certeza de que quer apagar todas as músicas em cache?", () => { L.clear("cached"); toast("Cache de músicas limpo"); });
+    case "clearSongCache": return confirm("Limpar o cache de músicas?", "Tem certeza de que quer apagar todas as músicas em cache?", () => { L.clear("cached"); engine.cacheClear(); toast("Cache de músicas limpo"); });
     case "clearImageCache": return confirm("Limpar o cache de imagens?", "As capas serão baixadas de novo quando necessário.", () => toast("Cache de imagens limpo"));
     case "backup": return toast("Backup criado em Documentos/MetroMusic-2026-11-09.backup");
     case "restore": return openDialog("confirm", { title: "Restaurar backup?", text: "Os dados atuais serão substituídos pelos do arquivo escolhido. Você precisará entrar de novo nas contas.", confirm: "Restaurar", action: () => toast("Backup restaurado (simulado)") });
@@ -160,15 +161,24 @@ function DiscordPreview() {
     <div className="p-4"><div className="text-[0.72rem] font-semibold uppercase tracking-wider text-t3 mb-2.5">Prévia do Rich Presence</div>
       <div className="rounded-xl p-4 max-w-sm" style={{ background: "#232428", color: "#dbdee1" }}>
         <div className="text-[0.72rem] font-bold uppercase mb-2.5" style={{ color: "#b5bac1" }}>{verb} {custom || "MetroMusic"}{provider ? ` · ${SOURCES.find((s) => s.id === t.provider)?.name}` : ""}</div>
-        <div className="flex gap-3"><Cover hue={t.hue} seed={t.seed} className="size-16 rounded-lg" /><div className="min-w-0 text-[0.86rem] leading-snug"><div className="font-semibold truncate text-white">{details ? t.title : a}</div><div className="truncate">{details ? a : t.title}</div>{pb && <div className="truncate opacity-80">{t.format} · {t.bitrate}</div>}<div className="tnum opacity-80">{Math.floor(pos / 60)}:{String(pos % 60).padStart(2, "0")} decorridos</div></div></div>
+        <div className="flex gap-3"><Cover hue={t.hue} seed={t.seed} src={t.art} className="size-16 rounded-lg" /><div className="min-w-0 text-[0.86rem] leading-snug"><div className="font-semibold truncate text-white">{details ? t.title : a}</div><div className="truncate">{details ? a : t.title}</div>{pb && <div className="truncate opacity-80">{t.format} · {t.bitrate}</div>}<div className="tnum opacity-80">{Math.floor(pos / 60)}:{String(pos % 60).padStart(2, "0")} decorridos</div></div></div>
         <div className="mt-3 space-y-1.5">{[b1 || "Ouvir no YouTube Music", b2 || "Conhecer o MetroMusic"].map((b) => <div key={b} className="h-8 rounded grid place-items-center text-[0.84rem] font-medium text-white" style={{ background: "#4e5058" }}>{b.replace("{song_name}", t.title).replace("{artist_name}", a)}</div>)}</div>
       </div></div>
   );
 }
 function StorageBars() {
   const lib = useLib();
+  const [real, setReal] = useState<{ bytes: number; entries: number } | null>(null);
+  useEffect(() => {
+    if (!backend) return;
+    let on = true;
+    const poll = () => engine.cacheStats().then((s) => { if (on && s) setReal(s); });
+    poll();
+    const t = setInterval(poll, 2500);
+    return () => { on = false; clearInterval(t); };
+  }, []);
   const dl = Object.values(lib.downloads).filter((v) => v >= 1).length;
-  const rows: [string, number, number][] = [["Downloads", dl * 28, 150], ["Cache de músicas", lib.cached.length * 6.5, 215], ["Cache de imagens", 184, 60], ["Banco de dados", 12, 300]];
+  const rows: [string, number, number][] = [["Downloads", dl * 28, 150], [real ? `Cache de músicas (${real.entries} faixas)` : "Cache de músicas", real ? real.bytes / 1048576 : lib.cached.length * 6.5, 215], ["Cache de imagens", 184, 60], ["Banco de dados", 12, 300]];
   const total = rows.reduce((s, r) => s + r[1], 0);
   const fmt = (mb: number) => (mb >= 1024 ? `${(mb / 1024).toFixed(1).replace(".", ",")} GB` : `${Math.round(mb)} MB`);
   return (

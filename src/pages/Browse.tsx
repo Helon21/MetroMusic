@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
 import { BadgeCheck, Check, Ellipsis, Library as LibraryIcon, Globe, Play, Plus, Radio, Search as SearchIcon, Shuffle, TrendingDown, TrendingUp, Minus, Video } from "lucide-react";
-import { albums, artistAlbums, artistOf, artists, artistTracks, getArtist, getTrack, moods, playlists, podcasts, sample, songs, SOURCES, sourceName, tracks as allTracks, type SourceId } from "../lib/catalog";
+import { albums, artistAlbums, artistOf, artists, artistTracks, getArtist, getTrack, moods, playlists, podcasts, sample, songs, SOURCES, sourceName, tracks as allTracks, registerTrack, type SourceId } from "../lib/catalog";
 import { artistMenu, trackMenu } from "../lib/menus";
 import { cx, fmtCount, norm } from "../lib/util";
 import { useLib } from "../store/library";
@@ -11,6 +11,7 @@ import { nav, toast, useUI } from "../store/ui";
 import { Grid, MediaCard, ShelfCards, TrackList, TrackTile, type Item } from "../components/media";
 import { Btn, Chip, Cover, coverBg, Empty, IconBtn, SectionTitle, Segmented } from "../components/ui";
 import { SourceIcon } from "../lib/brands";
+import { backend, engine as api, SEARCHABLE } from "../lib/engine";
 import { Hero } from "./Collection";
 
 const A = (list: { id: string }[], type: Item["type"]): Item[] => list.map((x) => ({ type, id: x.id }));
@@ -100,7 +101,7 @@ function Charts() {
             <div key={t.id} className="group flex items-center gap-3 h-15 px-2 rounded-xl hover:bg-s2 transition-colors" onDoubleClick={() => usePlayer.getState().play(ids, i, "Paradas")} onContextMenu={(e) => openMenu(e, trackMenu(t))}>
               <span className="w-8 text-center text-[1.2rem] font-bold tnum text-t2">{i + 1}</span>
               <span className={cx("w-4", d < 2 ? "text-ok" : d === 2 ? "text-t3" : "text-danger")}>{d < 2 ? <TrendingUp className="size-4" /> : d === 2 ? <Minus className="size-4" /> : <TrendingDown className="size-4" />}</span>
-              <button onClick={() => usePlayer.getState().play(ids, i, "Paradas")} className="relative shrink-0"><Cover hue={t.hue} seed={t.seed} className="size-11 rounded-md" /><span className="absolute inset-0 rounded-md bg-black/50 grid place-items-center opacity-0 group-hover:opacity-100"><Play className="size-4 text-white" fill="currentColor" /></span></button>
+              <button onClick={() => usePlayer.getState().play(ids, i, "Paradas")} className="relative shrink-0"><Cover hue={t.hue} seed={t.seed} src={t.art} className="size-11 rounded-md" /><span className="absolute inset-0 rounded-md bg-black/50 grid place-items-center opacity-0 group-hover:opacity-100"><Play className="size-4 text-white" fill="currentColor" /></span></button>
               <div className="min-w-0 flex-1"><div className="truncate font-medium">{t.title}</div><div className="truncate text-t3 text-[0.84rem]">{artistOf(t)}</div></div>
               <span className="text-t3 text-[0.82rem] tnum">{fmtCount(t.plays)}</span>
             </div>
@@ -164,6 +165,20 @@ export function BrowsePage({ id }: { id: string }) {
 // ───────── Busca
 const FILTERS: [string, string][] = [["all", "Tudo"], ["songs", "Músicas"], ["videos", "Vídeos"], ["albums", "Álbuns"], ["artists", "Artistas"], ["playlists", "Playlists"], ["community", "Playlists da comunidade"], ["podcasts", "Podcasts"], ["episodes", "Episódios"]];
 
+interface Remote { ids: string[]; loading: boolean; error?: string }
+
+/** Resultados reais do provedor escolhido (só no app, onde há backend). */
+function RemoteResults({ state, q, engine, retry }: { state: Remote; q: string; engine: SourceId; retry: () => void }) {
+  if (state.loading) return (
+    <div className="-mx-3">{Array.from({ length: 9 }, (_, i) => (
+      <div key={i} className="h-14 px-3 flex items-center gap-3"><div className="skeleton size-10 rounded-md" /><div className="flex-1"><div className="skeleton h-4 w-56 mb-2" /><div className="skeleton h-3 w-32" /></div></div>
+    ))}</div>
+  );
+  if (state.error) return <Empty icon={<SearchIcon />} title="Não foi possível buscar" text={state.error}><Btn onClick={retry}>Tentar de novo</Btn></Empty>;
+  if (!state.ids.length) return <Empty icon={<SearchIcon />} title="Nenhum resultado encontrado" text={`Nada em ${sourceName(engine)} para "${q}".`} />;
+  return <section className="-mx-3"><TrackList ids={state.ids} title={`Busca: ${q}`} showAlbum={state.ids.some((id) => !!getTrack(id)?.albumId)} /></section>;
+}
+
 export function SearchPage({ q }: { q: string }) {
   const [filter, setFilter] = useState("all");
   const [scope, setScope] = useState<"online" | "library">("online");
@@ -171,6 +186,20 @@ export function SearchPage({ q }: { q: string }) {
   const [engine, setEngine] = useState<SourceId>(source === "offline" ? "youtube" : source);
   const lib = useLib();
   const n = norm(q);
+  // Com backend e no escopo "online", a busca é de verdade (a de demonstração só vale fora do app).
+  const remoteMode = backend && online && scope === "online";
+  const [remote, setRemote] = useState<Remote>({ ids: [], loading: false });
+  const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    if (!remoteMode) return;
+    if (!SEARCHABLE.includes(engine)) { setRemote({ ids: [], loading: false, error: `A busca online em ${sourceName(engine)} ainda não está disponível. Use YouTube Music, SoundCloud ou Deezer.` }); return; }
+    let dead = false;
+    setRemote({ ids: [], loading: true });
+    api.search(engine, q)
+      .then((list) => { if (!dead) setRemote({ ids: (list ?? []).map((i) => registerTrack(i).id), loading: false }); })
+      .catch((e) => { if (!dead) setRemote({ ids: [], loading: false, error: String(e) }); });
+    return () => { dead = true; };
+  }, [remoteMode, q, engine, nonce]);
   const res = useMemo(() => {
     const hit = (s: string) => norm(s).includes(n);
     const inLib = scope === "library" || !online;
@@ -192,12 +221,12 @@ export function SearchPage({ q }: { q: string }) {
   return (
     <div className="px-8 pt-5 pb-10">
       <div className="flex items-end gap-4 mb-4">
-        <div className="flex-1 min-w-0"><div className="text-t3 font-medium">{count} resultados {scope === "library" || !online ? "na sua biblioteca" : `em ${sourceName(engine)}`}</div><h1 className="text-[2.1rem] font-bold tracking-tight truncate">"{q}"</h1></div>
+        <div className="flex-1 min-w-0"><div className="text-t3 font-medium">{remoteMode ? (remote.loading ? "Buscando…" : `${remote.ids.length} resultados`) : `${count} resultados`} {scope === "library" || !online ? "na sua biblioteca" : `em ${sourceName(engine)}`}</div><h1 className="text-[2.1rem] font-bold tracking-tight truncate">"{q}"</h1></div>
         {scope === "online" && online && <Btn variant="outline" onClick={(e) => openMenuAt(e.currentTarget, SOURCES.filter((s) => s.home && s.id !== "offline").map((s) => ({ label: `Buscar em ${s.name}`, icon: <SourceIcon id={s.id} size={16} />, checked: s.id === engine, onClick: () => setEngine(s.id) })))} icon={<SourceIcon id={engine} size={16} />}>{sourceName(engine)}</Btn>}
         <Segmented id="scope" value={!online ? "library" : scope} onChange={setScope} options={[["online", <><Globe />Online</>], ["library", <><LibraryIcon />Biblioteca</>]]} />
       </div>
-      <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-8 px-8 mb-7">{FILTERS.map(([v, l]) => <Chip key={v} active={filter === v} onClick={() => setFilter(v)}>{l}{v !== "all" && (res as any)[v].length > 0 && <span className="opacity-60 tnum">{(res as any)[v].length}</span>}</Chip>)}</div>
-      {count === 0 ? (
+      {!remoteMode && <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-8 px-8 mb-7">{FILTERS.map(([v, l]) => <Chip key={v} active={filter === v} onClick={() => setFilter(v)}>{l}{v !== "all" && (res as any)[v].length > 0 && <span className="opacity-60 tnum">{(res as any)[v].length}</span>}</Chip>)}</div>}
+      {remoteMode ? <RemoteResults state={remote} q={q} engine={engine} retry={() => setNonce((x) => x + 1)} /> : count === 0 ? (
         <Empty icon={<SearchIcon />} title="Nenhum resultado encontrado" text={`Não achamos nada para "${q}". Confira a grafia ou tente outra fonte.`}>{scope === "library" && online && <Btn onClick={() => setScope("online")}>Buscar online</Btn>}</Empty>
       ) : (<>
         {filter === "all" && best && (

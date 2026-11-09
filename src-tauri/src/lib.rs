@@ -71,6 +71,12 @@ fn toggle_mini(app: AppHandle, on_top: bool) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Lê uma variável de ambiente de desenvolvimento (usada pelos testes automáticos da interface).
+#[tauri::command]
+fn dev_flag(name: String) -> bool {
+    cfg!(debug_assertions) && name.starts_with("MM_") && std::env::var(&name).is_ok()
+}
+
 #[tauri::command]
 fn set_close_to_tray(state: State<AppState>, enabled: bool) {
     state.close_to_tray.store(enabled, Ordering::Relaxed);
@@ -205,8 +211,18 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![toggle_mini, show_main_window, set_close_to_tray, update_now_playing])
+        .invoke_handler(tauri::generate_handler![
+            toggle_mini, show_main_window, set_close_to_tray, update_now_playing, dev_flag,
+            commands::search_online, commands::audio_play, commands::audio_pause, commands::audio_resume, commands::audio_seek,
+            commands::audio_stop, commands::audio_set_volume, commands::audio_set_speed, commands::audio_precache,
+            commands::cache_stats, commands::cache_clear, commands::cache_configure,
+        ])
         .setup(|app| {
+            // Motor de áudio e cache. Os eventos `audio:*` chegam a todas as janelas.
+            let cache_dir = app.path().app_cache_dir()?.join("songs");
+            let handle = app.handle().clone();
+            let emit: audio::Emit = std::sync::Arc::new(move |name, payload| { let _ = handle.emit(name, payload); });
+            app.manage(playback::Player::new(cache_dir, 4096, emit));
             // Sem bandeja (ex.: ambiente sem appindicator) o app segue funcionando; só não esconde a janela.
             if let Err(e) = setup_tray(app.handle()) {
                 eprintln!("[bandeja] indisponível: {e}");

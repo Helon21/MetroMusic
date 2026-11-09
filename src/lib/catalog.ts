@@ -3,6 +3,12 @@
 
 export type SourceId = "youtube" | "tidal" | "spotify" | "soundcloud" | "deezer" | "jiosaavn" | "qobuz" | "offline";
 
+/** Faixa como o backend a descreve (espelha `TrackInfo` em src-tauri/src/model.rs). */
+export interface ExtInfo {
+  provider: "youtube" | "soundcloud" | "deezer"; id: string; title: string; artists: string[];
+  album?: string | null; durationMs?: number | null; isrc?: string | null; artworkUrl?: string | null;
+  explicit?: boolean; url?: string | null; previewUrl?: string | null;
+}
 export interface Artist {
   id: string; name: string; hue: number; seed: number; genre: string;
   listeners: number; subscribers: number; bio: string;
@@ -15,6 +21,8 @@ export interface Track {
   id: string; title: string; artistId: string; albumId: string; duration: number;
   explicit: boolean; plays: number; hue: number; seed: number; video?: boolean;
   provider: SourceId; format: string; bitrate: string; sampleRate: string; tier?: "Lossless" | "Hi-Res" | "Atmos";
+  /** Faixa real vinda de um provedor (toca pelo backend). Faixas de demonstração não têm. */
+  ext?: ExtInfo; art?: string;
   episode?: boolean; podcastId?: string; date?: string; local?: boolean;
 }
 export interface Playlist {
@@ -242,4 +250,54 @@ export function translateLine(text: string) {
   if (i >= 0) return LINES_EN[i];
   const b = BG.indexOf(text);
   return b >= 0 ? BG_EN[b] : text;
+}
+
+// ───────── Faixas reais (provedores)
+// Entram no mesmo catálogo das de demonstração, para menus, filas e listas funcionarem igual.
+const EXT_KEY = "metromusic-ext-tracks-v1";
+const EXT_MAX = 1500;
+const extOrder: string[] = [];
+let extTimer: ReturnType<typeof setTimeout> | undefined;
+
+function hashStr(s: string) { let h = 2166136261; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return h >>> 0; }
+
+function saveExt() {
+  clearTimeout(extTimer);
+  extTimer = setTimeout(() => {
+    try { localStorage.setItem(EXT_KEY, JSON.stringify(extOrder.map((id) => T.get(id)?.ext).filter(Boolean))); } catch { /* sem armazenamento */ }
+  }, 400);
+}
+
+/** Registra (ou atualiza) uma faixa real e devolve a `Track` correspondente. */
+export function registerTrack(info: ExtInfo, persist = true): Track {
+  const id = `${info.provider}:${info.id}`;
+  const h = hashStr(id);
+  const artistName = info.artists.join(", ") || "Artista desconhecido";
+  const artistId = `ext:${hashStr(info.provider + artistName.toLowerCase())}`;
+  if (!A.has(artistId)) A.set(artistId, { id: artistId, name: artistName, hue: h % 360, seed: h % 1e6, genre: "", listeners: 0, subscribers: 0, bio: "" });
+  let albumId = "";
+  if (info.album) {
+    albumId = `extal:${hashStr(info.provider + artistName + info.album)}`;
+    const al = AL.get(albumId);
+    if (al) { if (!al.trackIds.includes(id)) al.trackIds.push(id); }
+    else AL.set(albumId, { id: albumId, title: info.album, artistId, year: new Date().getFullYear(), hue: h % 360, seed: h % 1e6, kind: "Single", trackIds: [id] });
+  }
+  const prev = T.get(id);
+  const t: Track = {
+    id, title: info.title, artistId, albumId, duration: Math.round((info.durationMs ?? 0) / 1000), explicit: !!info.explicit, plays: 0,
+    hue: h % 360, seed: h % 1e6, provider: info.provider, format: "—", bitrate: "—", sampleRate: "—", ext: info, art: info.artworkUrl ?? undefined,
+  };
+  if (prev) Object.assign(prev, t); else T.set(id, t);
+  const track = T.get(id)!;
+  if (!extOrder.includes(id)) { extOrder.push(id); if (extOrder.length > EXT_MAX) extOrder.shift(); }
+  if (persist) saveExt();
+  return track;
+}
+
+/** Recarrega as faixas reais guardadas, antes de a interface montar. */
+export function loadExternalTracks() {
+  try {
+    const raw = localStorage.getItem(EXT_KEY);
+    if (raw) (JSON.parse(raw) as ExtInfo[]).forEach((i) => registerTrack(i, false));
+  } catch { /* dados antigos ou corrompidos: começa vazio */ }
 }

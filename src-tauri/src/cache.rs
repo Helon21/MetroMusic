@@ -250,7 +250,7 @@ impl Cache {
             s.running = true;
         }
         let (cache, entry) = (self.clone(), entry.clone());
-        tokio::spawn(async move { cache.run(entry, stream, refresh).await });
+        tauri::async_runtime::spawn(async move { cache.run(entry, stream, refresh).await });
     }
 
     /// Reduz o objetivo de uma entrada que ninguém mais precisa tocar por inteiro.

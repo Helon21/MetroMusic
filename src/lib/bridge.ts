@@ -11,7 +11,7 @@ import { getSetting, useSettings } from "../store/settings";
 /** Resumo do que o mini-player precisa para se desenhar. */
 export interface Snap {
   id: string; title: string; artist: string; album: string; hue: number; seed: number;
-  duration: number; position: number; playing: boolean; liked: boolean; speed: number; explicit: boolean;
+  duration: number; position: number; playing: boolean; liked: boolean; speed: number; explicit: boolean; art?: string;
 }
 
 function snap(): Snap | null {
@@ -20,7 +20,7 @@ function snap(): Snap | null {
   if (!t) return null;
   return {
     id: t.id, title: t.title, artist: artistOf(t), album: albumOf(t), hue: t.hue, seed: t.seed, duration: t.duration,
-    position: p.position, playing: p.playing, liked: useLib.getState().liked.includes(t.id), speed: p.speed, explicit: t.explicit,
+    position: p.position, playing: p.playing, liked: useLib.getState().liked.includes(t.id), speed: p.speed, explicit: t.explicit, art: t.art,
   };
 }
 

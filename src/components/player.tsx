@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { AnimatePresence, motion, Reorder } from "motion/react";
 import { AudioLines, Cast, ChevronDown, Ellipsis, Gauge, GripVertical, Heart, Info, ListMusic, ListPlus, Maximize2, MicVocal, Minimize2, Moon, Pause, PictureInPicture2, Play, Repeat, Repeat1, RotateCcw, Share2, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, TriangleAlert, Volume1, Volume2, VolumeX, Waypoints, X, Copy } from "lucide-react";
-import { artistOf, albumOf, getArtist, getTrack, getTracks, sourceName, type Track } from "../lib/catalog";
+import { artistOf, albumOf, getArtist, getTrack, getTracks, sourceName, type SourceId, type Track } from "../lib/catalog";
 import { sleepMenu, trackMenu } from "../lib/menus";
 import { copyText, cx, fmtCount, fmtLong, fmtTime } from "../lib/util";
 import { useLib } from "../store/library";
@@ -81,13 +81,20 @@ function Transport({ big }: { big?: boolean }) {
   );
 }
 
+const liveCodec = (c: string) => (c.startsWith("mp4a") || c === "aac" ? "AAC" : c.toUpperCase());
+
 export function QualityBadge({ t, onClick }: { t: Track; onClick?: () => void }) {
   const provider = useProvider(t)!;
-  const label = t.tier === "Hi-Res" ? "Hi-Res Lossless" : t.tier === "Lossless" ? "Lossless" : t.tier === "Atmos" ? "Dolby Atmos" : `${t.format} ${t.bitrate}`;
+  const info = usePlayer((s) => s.info);
+  const live = t.ext && info?.key === t.id ? info : null; // codec e fonte reais, vindos do backend
+  const preview = live?.source === "deezer-preview";
+  const shown = (live ? (preview ? "deezer" : live.source) : provider) as SourceId;
+  const shownName = preview ? "Deezer · trecho de 30 s" : sourceName(shown);
+  const label = live ? `${liveCodec(live.codec)} ${Math.round(live.bitrate / 1000)} kbps` : t.ext ? "…" : t.tier === "Hi-Res" ? "Hi-Res Lossless" : t.tier === "Lossless" ? "Lossless" : t.tier === "Atmos" ? "Dolby Atmos" : `${t.format} ${t.bitrate}`;
   return (
-    <button title={`${sourceName(provider)} · ${t.format} · ${t.bitrate} · ${t.sampleRate}\nClique para escolher a fonte`} onClick={onClick ?? (() => openDialog("source", { id: t.id }))}
+    <button title={`${shownName} · ${label}\nClique para escolher a fonte`} onClick={onClick ?? (() => openDialog("source", { id: t.id }))}
       className="inline-flex items-center gap-1.5 h-6 px-2 rounded-md bg-t1/8 hover:bg-t1/14 text-t2 text-[0.7rem] font-semibold tracking-wide uppercase whitespace-nowrap transition-colors">
-      {t.tier && <AudioLines className="size-3.5 text-accent" />}{label}<span className="text-t3 normal-case font-medium inline-flex items-center gap-1.5">· <SourceIcon id={provider} size={13} />{sourceName(provider)}</span>
+      {t.tier && <AudioLines className="size-3.5 text-accent" />}{label}<span className="text-t3 normal-case font-medium inline-flex items-center gap-1.5">· <SourceIcon id={shown} size={13} />{shownName}</span>
     </button>
   );
 }
@@ -130,7 +137,7 @@ export function PlayerBar() {
         <button aria-label="Abrir Tocando agora (F)" title="Abrir Tocando agora (F)" onClick={() => setNowPlaying(true)} className="group relative shrink-0">
           <AnimatePresence mode="popLayout" initial={false}>
             <motion.div key={t.id} initial={{ opacity: 0, scale: 0.85 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.85 }} transition={{ duration: 0.22 }}>
-              {hideThumb ? <div className="size-14 rounded-lg bg-s3 grid place-items-center text-accent"><AudioLines /></div> : <Cover hue={t.hue} seed={t.seed} className="size-14 rounded-lg shadow-lg shadow-black/30" />}
+              {hideThumb ? <div className="size-14 rounded-lg bg-s3 grid place-items-center text-accent"><AudioLines /></div> : <Cover hue={t.hue} seed={t.seed} src={t.art} className="size-14 rounded-lg shadow-lg shadow-black/30" />}
             </motion.div>
           </AnimatePresence>
           <span className="absolute inset-0 rounded-lg bg-black/55 grid place-items-center opacity-0 group-hover:opacity-100 transition-opacity"><Maximize2 className="size-5 text-white" /></span>
@@ -216,7 +223,7 @@ function QueueRow({ id, index, current }: { id: string; index: number; current?:
     <div className={cx("group flex items-center gap-3 h-14 px-2 rounded-lg", current ? "bg-accent-soft" : "hover:bg-s2")} onDoubleClick={() => usePlayer.getState().jump(index)} onContextMenu={(e) => openMenu(e, trackMenu(t, { queueIndex: index }))}>
       {!current && <GripVertical className="size-4 text-t3 opacity-0 group-hover:opacity-100 cursor-grab shrink-0 -mr-1.5" />}
       <button className="relative shrink-0" aria-label="Tocar" onClick={() => (current ? usePlayer.getState().toggle() : usePlayer.getState().jump(index))}>
-        <Cover hue={t.hue} seed={t.seed} className="size-10 rounded-md" />
+        <Cover hue={t.hue} seed={t.seed} src={t.art} className="size-10 rounded-md" />
         <span className={cx("absolute inset-0 rounded-md bg-black/55 grid place-items-center", current ? "opacity-100" : "opacity-0 group-hover:opacity-100")}>{current ? <Eq paused={!playing} /> : <Play className="size-4 text-white" fill="currentColor" />}</span>
       </button>
       <div className="min-w-0 flex-1">
@@ -269,10 +276,12 @@ function DetailsPanel({ t }: { t: Track }) {
   const followed = useLib((s) => s.followed.includes(t.artistId));
   const provider = useProvider(t)!;
   const next = usePlayer((s) => getTrack(s.queue[s.index + 1]));
-  const rows: [string, string][] = [["Fonte", sourceName(provider)], ["Formato", t.format], ["Taxa de bits", t.bitrate], ["Amostragem", t.sampleRate], ["Loudness", "−9,8 LUFS (normalizado para −14)"], ["Reproduções", fmtCount(t.plays)]];
+  const info = usePlayer((s) => s.info);
+  const live = t.ext && info?.key === t.id ? info : null;
+  const rows: [string, string][] = [["Fonte", live ? (live.source === "deezer-preview" ? "Deezer · trecho de 30 s" : sourceName(live.source as SourceId)) : sourceName(provider)], ["Formato", live ? liveCodec(live.codec) : t.format], ["Taxa de bits", live ? `${Math.round(live.bitrate / 1000)} kbps` : t.bitrate], ["Amostragem", t.sampleRate], ["Loudness", "−9,8 LUFS (normalizado para −14)"], ["Reproduções", fmtCount(t.plays)]];
   return (
     <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-8">
-      <Cover hue={t.hue} seed={t.seed} className="w-full rounded-2xl shadow-xl shadow-black/30" />
+      <Cover hue={t.hue} seed={t.seed} src={t.art} className="w-full rounded-2xl shadow-xl shadow-black/30" />
       <div className="mt-4 text-[1.25rem] font-semibold leading-tight">{t.title}</div>
       <div className="text-t2">{artistOf(t)}{!t.episode && <span className="text-t3"> · {albumOf(t)}</span>}</div>
       <div className="mt-3"><QualityBadge t={t} /></div>
@@ -294,7 +303,7 @@ function DetailsPanel({ t }: { t: Track }) {
       {next && (<>
         <div className="mt-5 text-[0.72rem] font-semibold uppercase tracking-wider text-t3 mb-2">A seguir</div>
         <button className="w-full flex items-center gap-3 p-2.5 rounded-2xl bg-s2 hover:bg-s3 text-left transition-colors" onClick={() => usePlayer.getState().next()}>
-          <Cover hue={next.hue} seed={next.seed} className="size-11 rounded-lg" /><div className="min-w-0"><div className="truncate font-medium">{next.title}</div><div className="truncate text-t3 text-[0.82rem]">{artistOf(next)}</div></div>
+          <Cover hue={next.hue} seed={next.seed} src={next.art} className="size-11 rounded-lg" /><div className="min-w-0"><div className="truncate font-medium">{next.title}</div><div className="truncate text-t3 text-[0.82rem]">{artistOf(next)}</div></div>
         </button>
       </>)}
     </div>
@@ -311,7 +320,7 @@ function Backdrop({ t }: { t: Track }) {
       {(mode === "blur" || mode === "movingBlur" || mode === "galaxyBlur") && (
         <AnimatePresence>
           <motion.div key={t.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 1 }} className="absolute inset-0">
-            <div className={cx("absolute -inset-[20%] blur-[90px] saturate-150 opacity-80", mode === "movingBlur" && "drift")} style={{ background: coverBg(t.hue, t.seed) }} />
+            <div className={cx("absolute -inset-[20%] blur-[90px] saturate-150 opacity-80", mode === "movingBlur" && "drift")} style={{ background: t.art ? `center / cover url("${t.art}")` : coverBg(t.hue, t.seed) }} />
             {mode === "movingBlur" && <div className="absolute -inset-[30%] blur-[110px] opacity-50 mix-blend-screen drift-rev" style={{ background: coverBg((t.hue + 40) % 360, t.seed + 1) }} />}
           </motion.div>
         </AnimatePresence>
@@ -352,7 +361,7 @@ export function NowPlaying() {
                     <AnimatePresence mode="popLayout" initial={false}>
                       <motion.div key={t.id} initial={{ opacity: 0, scale: 0.9, rotate: -2 }} animate={{ opacity: 1, scale: 1, rotate: 0 }} exit={{ opacity: 0, scale: 0.92 }} transition={{ type: "spring", stiffness: 260, damping: 26 }}>
                         {hideThumb ? <div className="w-full aspect-square rounded-3xl bg-white/8 grid place-items-center"><AudioLines className="size-24 text-accent" /></div>
-                          : <motion.div animate={{ scale: 1 }}><Cover hue={t.hue} seed={t.seed} className="w-full rounded-3xl shadow-2xl shadow-black/50" /></motion.div>}
+                          : <motion.div animate={{ scale: 1 }}><Cover hue={t.hue} seed={t.seed} src={t.art} className="w-full rounded-3xl shadow-2xl shadow-black/50" /></motion.div>}
                       </motion.div>
                     </AnimatePresence>
                     {underCover && <LyricLineNow track={t} className="mt-5 h-7 text-[1.05rem] font-semibold text-t2" />}

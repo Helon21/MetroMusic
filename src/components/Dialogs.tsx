@@ -64,7 +64,7 @@ function Duplicates({ props, close }: P) {
   return (
     <Modal title="Músicas duplicadas" onClose={close} footer={<><Btn variant="ghost" onClick={close}>Cancelar</Btn><Btn onClick={() => add(true)}>Adicionar mesmo assim</Btn><Btn variant="primary" onClick={() => add(false)}>Pular duplicadas</Btn></>}>
       <p className="text-t2 mb-3">{dup.length === 1 ? "Esta música já está na playlist:" : `${dup.length} músicas já estão na playlist:`}</p>
-      <div className="rounded-xl bg-s2 divide-y divide-line max-h-52 overflow-y-auto">{dup.map((id) => { const t = getTrack(id)!; return <div key={id} className="flex items-center gap-3 p-2.5"><Cover hue={t.hue} seed={t.seed} className="size-9 rounded-md" /><div className="min-w-0"><div className="truncate font-medium">{t.title}</div><div className="truncate text-t3 text-[0.8rem]">{artistOf(t)}</div></div></div>; })}</div>
+      <div className="rounded-xl bg-s2 divide-y divide-line max-h-52 overflow-y-auto">{dup.map((id) => { const t = getTrack(id)!; return <div key={id} className="flex items-center gap-3 p-2.5"><Cover hue={t.hue} seed={t.seed} src={t.art} className="size-9 rounded-md" /><div className="min-w-0"><div className="truncate font-medium">{t.title}</div><div className="truncate text-t3 text-[0.8rem]">{artistOf(t)}</div></div></div>; })}</div>
     </Modal>
   );
 }
@@ -201,7 +201,7 @@ function Mini({ close }: P) {
     <Modal title="Mini-player" subtitle="Janela compacta com os controles essenciais" width={420} onClose={close} footer={<Btn variant="primary" onClick={async () => { close(); const open = await toggleMiniWindow(!!getSetting("miniOnTop")); toast(open ? "Mini-player aberto" : "Mini-player fechado"); }}>Abrir em janela</Btn>}>
       {t && <div className="relative rounded-2xl overflow-hidden p-4 flex items-center gap-4" style={{ boxShadow: "var(--shadow)" }}>
         <div className="absolute inset-0 blur-2xl scale-150 opacity-60" style={{ background: coverBg(t.hue, t.seed) }} /><div className="absolute inset-0 bg-black/50" />
-        <Cover hue={t.hue} seed={t.seed} className="relative size-20 rounded-xl" />
+        <Cover hue={t.hue} seed={t.seed} src={t.art} className="relative size-20 rounded-xl" />
         <div className="relative min-w-0 flex-1 text-white"><div className="font-semibold truncate">{t.title}</div><div className="text-white/70 text-[0.86rem] truncate">{artistOf(t)}</div>
           <div className="flex gap-1 mt-2 -ml-2"><Btn size="sm" variant="ghost" className="!text-white" onClick={() => usePlayer.getState().prev()}>Anterior</Btn><Btn size="sm" className="!bg-white !text-black" onClick={() => usePlayer.getState().toggle()}>{playing ? "Pausar" : "Tocar"}</Btn><Btn size="sm" variant="ghost" className="!text-white" onClick={() => usePlayer.getState().next()}>Próxima</Btn></div></div>
       </div>}
@@ -327,7 +327,7 @@ function LyricsImage({ props, close }: P) {
       <div className="flex gap-5">
         <div className="relative w-64 aspect-[4/5] rounded-2xl overflow-hidden shrink-0 p-5 flex flex-col text-white" style={{ background: bg }}>
           {style === "cover" && <div className="absolute inset-0 bg-black/45 backdrop-blur-xl" />}
-          <div className="relative flex items-center gap-2.5 mb-auto"><Cover hue={t.hue} seed={t.seed} className="size-10 rounded-md" /><div className="min-w-0"><div className="font-semibold truncate text-[0.9rem]">{t.title}</div><div className="text-white/70 truncate text-[0.78rem]">{artistOf(t)}</div></div></div>
+          <div className="relative flex items-center gap-2.5 mb-auto"><Cover hue={t.hue} seed={t.seed} src={t.art} className="size-10 rounded-md" /><div className="min-w-0"><div className="font-semibold truncate text-[0.9rem]">{t.title}</div><div className="text-white/70 truncate text-[0.78rem]">{artistOf(t)}</div></div></div>
           <div className="relative text-[1.25rem] font-bold leading-tight tracking-tight space-y-1.5">{lines.map((l, i) => <div key={i}>{l.text}</div>)}</div>
           <div className="relative mt-4 text-white/60 text-[0.7rem] font-semibold tracking-wider flex items-center gap-1.5"><AudioLines className="size-3.5" />METROMUSIC</div>
         </div>
@@ -347,7 +347,7 @@ function SongPicker({ label, value, onChange }: { label: string; value: string; 
   const list = songs.filter((s) => counts[s.id] && norm(`${s.title} ${artistOf(s)}`).includes(norm(q)));
   return (
     <Field label={label}>
-      {t ? <div className="flex items-center gap-3 p-2.5 rounded-xl bg-s2"><Cover hue={t.hue} seed={t.seed} className="size-10 rounded-md" /><div className="min-w-0 flex-1"><div className="truncate font-medium">{t.title}</div><div className="text-t3 text-[0.8rem] truncate">{artistOf(t)} · tempo de escuta: {fmtTime((counts[t.id] ?? 0) * t.duration)}</div></div><Btn size="sm" variant="ghost" onClick={() => onChange("")}>Trocar</Btn></div>
+      {t ? <div className="flex items-center gap-3 p-2.5 rounded-xl bg-s2"><Cover hue={t.hue} seed={t.seed} src={t.art} className="size-10 rounded-md" /><div className="min-w-0 flex-1"><div className="truncate font-medium">{t.title}</div><div className="text-t3 text-[0.8rem] truncate">{artistOf(t)} · tempo de escuta: {fmtTime((counts[t.id] ?? 0) * t.duration)}</div></div><Btn size="sm" variant="ghost" onClick={() => onChange("")}>Trocar</Btn></div>
         : <><TextField value={q} onChange={setQ} placeholder="Digite para buscar" icon={<Search />} />
           {q && <div className="mt-1.5 rounded-xl bg-s2 max-h-40 overflow-y-auto">{list.slice(0, 6).map((s) => <button key={s.id} onClick={() => onChange(s.id)} className="w-full text-left px-3 h-9 hover:bg-s3 truncate text-[0.88rem]">{s.title} <span className="text-t3">· {artistOf(s)}</span></button>)}{list.length > 6 && <div className="px-3 py-2 text-t3 text-[0.78rem]">Continue digitando para refinar (mais {list.length - 6})</div>}</div>}</>}
     </Field>

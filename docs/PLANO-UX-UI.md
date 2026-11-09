@@ -190,5 +190,5 @@ Todo acesso a dados passa por três pontos, que hoje devolvem mocks:
    - **Controles de mídia do sistema** (MPRIS no Linux, SMTC no Windows, Now Playing no macOS) com título, artista, álbum, duração e posição.
    - **Atalhos globais** (`Ctrl+Alt+Espaço` e setas), **notificações** ao trocar de faixa e **iniciar com o sistema**.
    - Fora do Tauri (navegador) tudo isso vira no-op e os eventos passam por `BroadcastChannel`, o que permite testar o mini-player em duas abas.
-3. **Próxima:** backend. Motor de áudio, provedores (portando a lógica do MetroFuse), downloads, cache e biblioteca local. Os dois pontos de troca continuam sendo `lib/catalog.ts` e `store/player.ts`.
+3. **Em andamento (branch `feat/backend-audio`):** backend de áudio. Já tocam YouTube Music, SoundCloud e Deezer (este via correspondência em outro provedor), com cache e pré-cache. Ver `docs/BACKEND.md`. Falta: contas e login, downloads offline, biblioteca local, letras, scrobbling, equalizador e crossfade no motor.
 4. **Depois:** internacionalização (os textos estão em pt-BR direto no código), acessibilidade com leitor de tela, testes automatizados e empacotamento para as três plataformas.

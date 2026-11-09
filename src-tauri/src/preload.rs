@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
-use tokio::task::JoinHandle;
+use tauri::async_runtime::JoinHandle;
 
 pub const MAX_COUNT: usize = 10;
 const RETRY_DELAY_MS: u64 = 15_000;
@@ -65,7 +65,7 @@ impl Preloader {
             let me = self.clone();
             let order = order.clone();
             let k = key.clone();
-            st.active.insert(key, tokio::spawn(async move { me.job(k, track, distance, order).await }));
+            st.active.insert(key, tauri::async_runtime::spawn(async move { me.job(k, track, distance, order).await }));
         }
     }
 
@@ -94,7 +94,7 @@ impl Preloader {
                     // reavalia depois do intervalo, como o MetroFuse (requestRefresh após RETRY_DELAY)
                     let me = self.clone();
                     drop(st);
-                    tokio::spawn(async move {
+                    tauri::async_runtime::spawn(async move {
                         tokio::time::sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
                         let last = me.st.lock().last.clone();
                         if let Some((targets, order)) = last { me.update(targets, order); }

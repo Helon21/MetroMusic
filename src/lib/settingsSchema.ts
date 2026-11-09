@@ -153,7 +153,7 @@ export const PAGES: Page[] = [
       tg("persistentShuffle", "Embaralhamento persistente", false, "Mantém o aleatório ao iniciar novas músicas ou playlists"),
       tg("rememberShuffleRepeat", "Lembrar aleatório e repetir", true),
       tg("preventDuplicates", "Evitar duplicadas na fila", true, "Uma faixa já na fila é movida em vez de adicionada de novo"),
-      sel("preload", "Pré-carregar próximas faixas", "1", [["0", "Desativado"], ["1", "1 faixa"], ["2", "2 faixas"], ["3", "3 faixas"]], "Reduz o intervalo entre músicas"),
+      sel("preload", "Pré-carregar próximas faixas", "3", [["0", "Desativado"], ["1", "1 faixa"], ["2", "2 faixas"], ["3", "3 faixas"], ["5", "5 faixas"], ["10", "10 faixas"]], "Baixa o começo das próximas faixas da fila para o intervalo entre músicas sumir"),
     ] },
     { title: "Erros", items: [
       tg("autoSkipOnError", "Pular para a próxima em caso de erro", true),

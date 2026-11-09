@@ -34,9 +34,9 @@ export default function Mini() {
   );
   return (
     <div data-tauri-drag-region className="relative h-screen w-screen overflow-hidden bg-bg text-t1 flex items-center gap-3.5 px-3.5 cursor-default">
-      <div className="absolute inset-0 opacity-60 blur-2xl scale-150 pointer-events-none transition-[background] duration-700" style={{ background: coverBg(s.hue, s.seed) }} />
+      <div className="absolute inset-0 opacity-60 blur-2xl scale-150 pointer-events-none transition-[background] duration-700" style={{ background: s.art ? `center / cover url("${s.art}")` : coverBg(s.hue, s.seed) }} />
       <div className="absolute inset-0 bg-black/55 pointer-events-none" />
-      <Cover hue={s.hue} seed={s.seed} className="relative size-[92px] rounded-xl shadow-xl shadow-black/40" />
+      <Cover hue={s.hue} seed={s.seed} src={s.art} className="relative size-[92px] rounded-xl shadow-xl shadow-black/40" />
       <div data-tauri-drag-region className="relative flex-1 min-w-0 h-[92px] flex flex-col justify-between">
         <div data-tauri-drag-region className="flex items-start gap-1">
           <div data-tauri-drag-region className="flex-1 min-w-0 pt-0.5">

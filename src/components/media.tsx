@@ -98,7 +98,7 @@ const Row = memo(function Row({ id, i, cols, selected, numbered, showAlbum, show
         </button>
       </div>
       <div className="flex items-center gap-3 min-w-0">
-        {showCover && <Cover hue={t.hue} seed={t.seed} className={dense ? "size-9 rounded-md" : "size-10 rounded-md"} />}
+        {showCover && <Cover hue={t.hue} seed={t.seed} src={t.art} className={dense ? "size-9 rounded-md" : "size-10 rounded-md"} />}
         <div className="min-w-0">
           <div className={cx("truncate font-medium flex items-center gap-1.5", current && "text-accent")}><span className="truncate">{t.title}</span>{t.video && <Video className="size-3.5 text-t3 shrink-0" />}</div>
           <div className="truncate text-t3 text-[0.84rem] flex items-center gap-1.5">
@@ -129,7 +129,7 @@ export function resolveItem(it: Item, lib = useLib.getState()) {
     case "artist": { const a = getArtist(it.id); return a && { title: a.name, sub: "Artista", hue: a.hue, seed: a.seed, to: `artist/${a.id}`, artist: true, ids: getTracks([]).map((t) => t.id), menu: () => artistMenu(a) }; }
     case "playlist": { const p = resolvePlaylist(it.id, lib); return p && { title: p.title, sub: p.kind === "auto" ? `${p.trackIds.length} músicas` : p.kind === "mix" ? "Mix" : `Playlist · ${p.owner}`, hue: p.hue, seed: p.seed, to: `playlist/${p.id}`, icon: p.icon, ids: p.trackIds, menu: () => playlistMenu(p) }; }
     case "podcast": { const p = getPodcast(it.id); return p && { title: p.title, sub: `Podcast · ${p.author}`, hue: p.hue, seed: p.seed, to: `podcast/${p.id}`, ids: p.episodeIds, menu: () => [] }; }
-    case "track": { const t = getTrack(it.id); return t && { title: t.title, sub: `Música · ${artistOf(t)}`, hue: t.hue, seed: t.seed, to: "", ids: [t.id], menu: () => trackMenu(t) }; }
+    case "track": { const t = getTrack(it.id); return t && { title: t.title, sub: `Música · ${artistOf(t)}`, hue: t.hue, seed: t.seed, art: t.art, to: "", ids: [t.id], menu: () => trackMenu(t) }; }
   }
   return undefined;
 }
@@ -150,7 +150,7 @@ export const MediaCard = memo(function MediaCard({ item, sub, className }: { ite
     <motion.div whileHover="hover" className={cx("group p-3 -m-1.5 rounded-2xl hover:bg-s1 transition-colors duration-200 text-left", className)}
       onClick={() => (r.to ? nav(r.to) : play())} onContextMenu={(e) => { const m = r.menu(); if (m.length) openMenu(e, m); }} role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && (r.to ? nav(r.to) : play())}>
       <motion.div variants={{ hover: { y: -3 } }} transition={{ type: "spring", stiffness: 400, damping: 26 }} className="relative">
-        <Cover hue={r.hue} seed={r.seed} artist={(r as any).artist} icon={(r as any).icon} className="w-full shadow-lg shadow-black/25" />
+        <Cover hue={r.hue} seed={r.seed} src={(r as any).art} artist={(r as any).artist} icon={(r as any).icon} className="w-full shadow-lg shadow-black/25" />
         {item.type !== "artist" && r.ids.length > 0 && (
           <button aria-label="Tocar" onClick={play} className={cx("absolute right-2.5 bottom-2.5 size-11 rounded-full bg-accent text-accent-fg grid place-items-center shadow-xl shadow-black/40 transition-all duration-200 hover:scale-108 active:scale-95",
             playingThis ? "opacity-100" : "opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0")}>
@@ -201,7 +201,7 @@ export function TrackTile({ id, ids, title, i }: { id: string; ids: string[]; ti
   return (
     <div className="group flex items-center gap-3 p-2 rounded-xl hover:bg-s2 transition-colors min-w-0" onDoubleClick={() => usePlayer.getState().play(ids, i, title)} onContextMenu={(e) => openMenu(e, trackMenu(t))}>
       <button aria-label="Tocar" className="relative shrink-0" onClick={() => (current ? usePlayer.getState().toggle() : usePlayer.getState().play(ids, i, title))}>
-        <Cover hue={t.hue} seed={t.seed} className="size-12 rounded-lg" />
+        <Cover hue={t.hue} seed={t.seed} src={t.art} className="size-12 rounded-lg" />
         <span className={cx("absolute inset-0 grid place-items-center rounded-lg bg-black/50 transition-opacity", current ? "opacity-100" : "opacity-0 group-hover:opacity-100")}>
           {current && playing ? <Eq /> : <Play className="size-4.5 text-white" fill="currentColor" />}
         </span>

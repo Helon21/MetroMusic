@@ -60,7 +60,7 @@ impl Player {
         }
         (self.emit)("audio:state", json!({ "token": token, "state": "loading", "key": track.key() }));
         let me = self.clone();
-        tokio::spawn(async move {
+        tauri::async_runtime::spawn(async move {
             if let Err(e) = me.start_track(token, track, start, autoplay, order).await {
                 if me.token.load(Ordering::SeqCst) == token {
                     (me.emit)("audio:state", json!({ "token": token, "state": "error", "message": e }));
