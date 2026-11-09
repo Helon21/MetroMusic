@@ -27,34 +27,34 @@ interface Lib {
   clear: (what: "history" | "searchHistory" | "downloads" | "cached" | "recognitions") => void;
 }
 
+/** Estado inicial: vazio. Tudo o que aparece vem do uso real (reproduções, curtidas, conta). */
 function seed() {
-  const r = rng(424242);
-  const now = Date.now();
-  const history: HistoryEntry[] = [];
-  const counts: Record<string, number> = {};
-  const favs = sample(songs, 60, 99);
-  for (let i = 0; i < 420; i++) {
-    // viés para um grupo de favoritas, para as estatísticas terem um "top" de verdade
-    const t = r() < 0.7 ? favs[Math.floor(r() * r() * favs.length)] : songs[Math.floor(r() * songs.length)];
-    history.push({ id: t.id, at: now - Math.floor(r() * r() * 300 * 864e5) - i * 6e4 });
-    counts[t.id] = (counts[t.id] ?? 0) + 1;
-  }
-  history.sort((a, b) => b.at - a.at);
-  const downloads: Record<string, number> = {};
-  sample(songs, 34, 7).forEach((t) => (downloads[t.id] = 1));
   return {
-    liked: sample(songs, 48, 1).map((t) => t.id), savedAlbums: sample(albums, 14, 2).map((a) => a.id),
-    followed: sample(artists, 9, 3).map((a) => a.id), savedPlaylists: ["ed0", "ed3", "cm1", "mix0"], subscribedPodcasts: [podcasts[0].id, podcasts[2].id],
-    later: [podcasts[1].episodeIds[0], podcasts[0].episodeIds[2]],
-    playlists: catalogPlaylists.filter((p) => p.kind === "local").map((p) => ({ ...p, trackIds: [...p.trackIds] })),
-    downloads, cached: sample(songs, 52, 11).map((t) => t.id), localFiles: sample(songs, 40, 5).map((t) => t.id),
-    pins: [
-      { type: "playlist", id: "p_estrada" }, { type: "album", id: albums[3].id }, { type: "artist", id: artists[1].id }, { type: "track", id: favs[0].id },
-      { type: "playlist", id: "mix0" }, { type: "album", id: albums[11].id }, { type: "artist", id: artists[6].id }, { type: "track", id: favs[4].id }, { type: "playlist", id: "p_foco" },
-    ] as Pin[],
-    history, counts, searchHistory: ["lume aurora", "jazz para a noite", "céu de vidro ao vivo", "lo-fi"],
-    recognitions: sample(songs, 5, 77).map((t, i) => ({ id: t.id, at: now - (i + 1) * 3 * 864e5 })),
-    folders: ["~/Música", "/mnt/dados/Discos FLAC"], accounts: { youtube: "cadu", deezer: "cadu@email.com", lastfm: "caduhd4" } as Record<string, string>,
+    liked: [] as string[], savedAlbums: [] as string[], followed: [] as string[], savedPlaylists: [] as string[], subscribedPodcasts: [] as string[], later: [] as string[],
+    playlists: [] as Playlist[], downloads: {} as Record<string, number>, cached: [] as string[], localFiles: [] as string[],
+    pins: [] as Pin[], history: [] as HistoryEntry[], counts: {} as Record<string, number>, searchHistory: [] as string[], recognitions: [] as Recognition[],
+    folders: [] as string[], accounts: {} as Record<string, string>,
+  };
+}
+
+/** Ids de faixas/coleções reais têm "provedor:id" (ou prefixo ext…); os de demonstração, não. */
+const isReal = (id: string) => id.includes(":") || id.startsWith("ext");
+
+/** Remove do estado guardado tudo o que veio dos dados de demonstração (versões antigas do app). */
+function purgeMock(p: any) {
+  if (!p || typeof p !== "object") return p;
+  const keep = (a: unknown) => (Array.isArray(a) ? a.filter((x) => typeof x === "string" && isReal(x)) : []);
+  const pick = (o: unknown) => Object.fromEntries(Object.entries((o as Record<string, number>) ?? {}).filter(([k]) => isReal(k)));
+  return {
+    ...p,
+    liked: keep(p.liked), cached: keep(p.cached), localFiles: keep(p.localFiles), savedAlbums: keep(p.savedAlbums), followed: keep(p.followed), savedPlaylists: keep(p.savedPlaylists),
+    downloads: pick(p.downloads), counts: pick(p.counts),
+    history: (p.history ?? []).filter((h: HistoryEntry) => isReal(h.id)),
+    recognitions: (p.recognitions ?? []).filter((r: Recognition) => isReal(r.id)),
+    pins: (p.pins ?? []).filter((x: Pin) => isReal(x.id)),
+    // playlists criadas pelo usuário ficam (só sem as faixas de demonstração); as de exemplo saem
+    playlists: (p.playlists ?? []).filter((pl: Playlist) => !catalogPlaylists.some((c) => c.id === pl.id)).map((pl: Playlist) => ({ ...pl, trackIds: pl.trackIds.filter(isReal) })),
+    searchHistory: [], folders: [], accounts: {},
   };
 }
 
@@ -102,7 +102,7 @@ export const useLib = create<Lib>()(
         clear: (what) => set(what === "downloads" ? { downloads: {} } : ({ [what]: [] } as Partial<Lib>)),
       };
     },
-    { name: "metromusic-library-v1" },
+    { name: "metromusic-library-v1", version: 2, migrate: (p: any, v: number) => (v < 2 ? purgeMock(p) : p) },
   ),
 );
 

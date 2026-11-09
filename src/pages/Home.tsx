@@ -141,7 +141,8 @@ export default function Home() {
   // Simula a ida ao provedor ao trocar de fonte ou atualizar.
   useEffect(() => { setLoading(true); setChip(null); const t = setTimeout(() => setLoading(false), 520); return () => clearTimeout(t); }, [source, nonce]);
 
-  const recentArtist = getArtist(getTrack(lib.history[0]?.id ?? "t0")!.artistId)!;
+  const recentTrack = lib.history.map((h) => getTrack(h.id)).find(Boolean) ?? songs[0];
+  const recentArtist = getArtist(recentTrack.artistId) ?? getArtist(songs[0].artistId)!;
   const keep = useMemo(() => {
     const seen = new Set<string>(); const out: Item[] = [];
     for (const h of lib.history) { const t = getTrack(h.id); if (!t || t.episode) continue; const it: Item = out.length % 3 === 2 ? { type: "artist", id: t.artistId } : { type: "album", id: t.albumId }; if (!seen.has(it.id)) { seen.add(it.id); out.push(it); } if (out.length >= 12) break; }
