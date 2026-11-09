@@ -9,6 +9,7 @@ import { useCurrent, usePlayer, useProvider } from "../store/player";
 import { useSetting } from "../store/settings";
 import { nav, openDialog, toast, useUI } from "../store/ui";
 import { LyricLineNow, LyricsMenuButton, LyricsView } from "./Lyrics";
+import { SourceIcon } from "../lib/brands";
 import { isNativeMac } from "../lib/native";
 import { WindowControls } from "./WindowControls";
 import { Badge, Btn, Cover, coverBg, Empty, Eq, Explicit, IconBtn, Range, Segmented, Spinner } from "./ui";
@@ -86,7 +87,7 @@ export function QualityBadge({ t, onClick }: { t: Track; onClick?: () => void })
   return (
     <button title={`${sourceName(provider)} · ${t.format} · ${t.bitrate} · ${t.sampleRate}\nClique para escolher a fonte`} onClick={onClick ?? (() => openDialog("source", { id: t.id }))}
       className="inline-flex items-center gap-1.5 h-6 px-2 rounded-md bg-t1/8 hover:bg-t1/14 text-t2 text-[0.7rem] font-semibold tracking-wide uppercase whitespace-nowrap transition-colors">
-      {t.tier && <AudioLines className="size-3.5 text-accent" />}{label}<span className="text-t3 normal-case font-medium">· {sourceName(provider)}</span>
+      {t.tier && <AudioLines className="size-3.5 text-accent" />}{label}<span className="text-t3 normal-case font-medium inline-flex items-center gap-1.5">· <SourceIcon id={provider} size={13} />{sourceName(provider)}</span>
     </button>
   );
 }

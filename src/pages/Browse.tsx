@@ -10,6 +10,7 @@ import { useSetting } from "../store/settings";
 import { nav, toast, useUI } from "../store/ui";
 import { Grid, MediaCard, ShelfCards, TrackList, TrackTile, type Item } from "../components/media";
 import { Btn, Chip, Cover, coverBg, Empty, IconBtn, SectionTitle, Segmented } from "../components/ui";
+import { SourceIcon } from "../lib/brands";
 import { Hero } from "./Collection";
 
 const A = (list: { id: string }[], type: Item["type"]): Item[] => list.map((x) => ({ type, id: x.id }));
@@ -192,7 +193,7 @@ export function SearchPage({ q }: { q: string }) {
     <div className="px-8 pt-5 pb-10">
       <div className="flex items-end gap-4 mb-4">
         <div className="flex-1 min-w-0"><div className="text-t3 font-medium">{count} resultados {scope === "library" || !online ? "na sua biblioteca" : `em ${sourceName(engine)}`}</div><h1 className="text-[2.1rem] font-bold tracking-tight truncate">"{q}"</h1></div>
-        {scope === "online" && online && <Btn variant="outline" onClick={(e) => openMenuAt(e.currentTarget, SOURCES.filter((s) => s.home && s.id !== "offline").map((s) => ({ label: `Buscar em ${s.name}`, checked: s.id === engine, onClick: () => setEngine(s.id) })))}>{sourceName(engine)}</Btn>}
+        {scope === "online" && online && <Btn variant="outline" onClick={(e) => openMenuAt(e.currentTarget, SOURCES.filter((s) => s.home && s.id !== "offline").map((s) => ({ label: `Buscar em ${s.name}`, icon: <SourceIcon id={s.id} size={16} />, checked: s.id === engine, onClick: () => setEngine(s.id) })))} icon={<SourceIcon id={engine} size={16} />}>{sourceName(engine)}</Btn>}
         <Segmented id="scope" value={!online ? "library" : scope} onChange={setScope} options={[["online", <><Globe />Online</>], ["library", <><LibraryIcon />Biblioteca</>]]} />
       </div>
       <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-8 px-8 mb-7">{FILTERS.map(([v, l]) => <Chip key={v} active={filter === v} onClick={() => setFilter(v)}>{l}{v !== "all" && (res as any)[v].length > 0 && <span className="opacity-60 tnum">{(res as any)[v].length}</span>}</Chip>)}</div>

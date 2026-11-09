@@ -6,6 +6,7 @@ import { coverBg } from "./ui";
 import { copyText, cx, fmtCount, fmtTime, norm } from "../lib/util";
 import { useLib } from "../store/library";
 import { usePlayer } from "../store/player";
+import { BrandTile, SourceIcon, type BrandId } from "../lib/brands";
 import { toggleMiniWindow } from "../lib/native";
 import { getSetting, setSetting, useSetting } from "../store/settings";
 import { nav, toast, useUI } from "../store/ui";
@@ -100,7 +101,7 @@ function Source({ props, close }: P) {
       </button>
       {loading ? <div className="grid place-items-center h-40 text-t3"><Spinner className="size-6" /></div> : matches.map((m) => (
         <button key={m.id} onClick={() => set(m.id)} className={cx("w-full flex items-center gap-3 p-3 rounded-xl text-left transition-colors", override === m.id ? "bg-accent-soft" : "hover:bg-s2")}>
-          <span className="size-2.5 rounded-full mx-1" style={{ background: `oklch(0.72 0.16 ${SOURCES.find((s) => s.id === m.id)!.hue})` }} />
+          <SourceIcon id={m.id} size={22} className="mx-0.5" />
           <div className="flex-1 min-w-0"><div className="font-medium">{sourceName(m.id)}</div><div className="text-t3 text-[0.82rem]">{m.q}</div></div>
           <div className="text-right text-[0.78rem] tnum"><div className={m.conf > 90 ? "text-ok" : "text-warn"}>{m.conf}% de correspondência</div><div className="text-t3">{m.ms} ms</div></div>
           {override === m.id && <Check className="size-5 text-accent" />}
@@ -272,7 +273,7 @@ function Login({ props, close }: P) {
   const done = () => { setBusy(true); setTimeout(() => { useLib.getState().setAccount(props.service, user.trim() || "cadu"); close(); toast(`Conectado ao ${sv.name}`); }, 1100); };
   return (
     <Modal title={`Entrar no ${sv.name}`} width={440} onClose={close}>
-      <div className="flex justify-center mb-5"><div className="size-16 rounded-2xl grid place-items-center text-white" style={{ background: `linear-gradient(140deg, oklch(0.65 0.17 ${sv.hue}), oklch(0.42 0.14 ${sv.hue + 30}))` }}><LogIn className="size-7" /></div></div>
+      <div className="flex justify-center mb-5"><BrandTile id={(props.service in SERVICES ? props.service : "youtube") as BrandId} size={64} className="rounded-2xl" /></div>
       {sv.token && props.service !== "lastfm" && <div className="flex justify-center mb-5"><div className="inline-flex p-1 rounded-full bg-s2">{(["web", "token"] as const).map((m) => <button key={m} onClick={() => setMode(m)} className={cx("h-8 px-4 rounded-full text-[0.86rem] font-medium", mode === m ? "bg-accent text-accent-fg" : "text-t2")}>{m === "web" ? "Login pela web" : "Token / cookie"}</button>)}</div></div>}
       {busy ? <div className="grid place-items-center h-36 gap-3 text-t2"><Spinner className="size-7" />Entrando…</div>
         : props.service === "lastfm" ? (<><Field label="Usuário"><TextField autoFocus value={user} onChange={setUser} /></Field><Field label="Senha"><TextField secret value={token} onChange={setToken} onEnter={done} /></Field><Btn variant="primary" className="w-full" disabled={!user || !token} onClick={done}>Entrar</Btn></>)

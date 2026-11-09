@@ -8,6 +8,7 @@ import { AUTO, resolvePlaylist, useLib } from "../store/library";
 import { usePlayer } from "../store/player";
 import { useSetting } from "../store/settings";
 import { nav, openDialog, toast, useRoute, useUI } from "../store/ui";
+import { SourceIcon } from "../lib/brands";
 import { isNativeMac } from "../lib/native";
 import { WindowControls } from "./WindowControls";
 import { Cover, Eq, IconBtn, Kbd } from "./ui";
@@ -170,9 +171,9 @@ export function TopBar() {
       {!online && <span className="hidden md:inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-warn/15 text-warn text-[0.78rem] font-semibold"><CloudOff className="size-3.5" />Offline</span>}
       <button title="Fonte do conteúdo da tela inicial" onClick={(e) => openMenuAt(e.currentTarget, [
         { header: true, label: "Fonte da tela inicial" },
-        ...SOURCES.filter((s) => s.home).map((s) => ({ label: s.name, icon: <span className="size-2.5 rounded-full mx-[3px]" style={{ background: `oklch(0.72 0.16 ${s.hue})` }} />, checked: s.id === source, onClick: () => { setSource(s.id); if (!route.startsWith("home")) nav("home"); } })),
+        ...SOURCES.filter((s) => s.home).map((s) => ({ label: s.name, icon: <SourceIcon id={s.id} size={16} />, checked: s.id === source, onClick: () => { setSource(s.id); if (!route.startsWith("home")) nav("home"); } })),
       ])} className="h-9 pl-3 pr-2 rounded-full bg-s2 hover:bg-s3 inline-flex items-center gap-2 text-[0.88rem] font-medium transition-colors">
-        <span className="size-2.5 rounded-full" style={{ background: `oklch(0.72 0.16 ${src.hue})` }} /><span className="hidden lg:inline">{src.name}</span><ChevronDown className="size-4 text-t3" />
+        <SourceIcon id={src.id} size={16} /><span className="hidden lg:inline">{src.name}</span><ChevronDown className="size-4 text-t3" />
       </button>
       <IconBtn label="Histórico" active={route === "history"} onClick={() => nav("history")}><History /></IconBtn>
       <IconBtn label="Estatísticas" active={route === "stats"} onClick={() => nav("stats")}><TrendingUp /></IconBtn>

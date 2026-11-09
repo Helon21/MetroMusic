@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronLeft, ChevronRight, CircleUser, Clock, History as HistoryIcon, ListPlus, LogIn, LogOut, Pause, Play, Search, Trash2, TrendingUp, X, Check, Settings } from "lucide-react";
 import { artistOf, getAlbum, getArtist, getTrack, playlists, podcasts, sample, albums, artists } from "../lib/catalog";
+import { BrandTile, type BrandId } from "../lib/brands";
 import { cx, dayLabel, fmtLong, fmtNum, norm } from "../lib/util";
 import { useLib, type HistoryEntry } from "../store/library";
 import { usePlayer } from "../store/player";
@@ -179,7 +180,7 @@ export function AccountPage() {
       <div className="grid gap-3 mb-10" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(17rem, 1fr))" }}>
         {SERVICE_LIST.map(([id, name, hue, desc]) => (
           <button key={id} onClick={() => nav(`settings/${id === "youtube" ? "privacy" : id}`)} className="flex items-center gap-3.5 p-4 rounded-2xl bg-s1 hover:bg-s2 text-left transition-colors">
-            <div className="size-11 rounded-xl grid place-items-center text-white font-bold shrink-0" style={{ background: `linear-gradient(140deg, oklch(0.65 0.17 ${hue}), oklch(0.42 0.14 ${hue + 30}))` }}>{name[0]}</div>
+            <BrandTile id={id as BrandId} size={44} />
             <div className="min-w-0 flex-1"><div className="font-semibold">{name}</div><div className="text-t3 text-[0.82rem] truncate">{accounts[id] ? `Conectado como ${accounts[id]}` : desc}</div></div>
             {accounts[id] ? <Check className="size-5 text-ok" /> : <span className="text-accent text-[0.84rem] font-semibold">Conectar</span>}
           </button>

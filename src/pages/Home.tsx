@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
-import { Dices, Gift, LogIn, Mic, Play, RefreshCw, Shuffle, Sparkles, WifiOff, X } from "lucide-react";
+import { Dices, Gift, Mic, Play, RefreshCw, Shuffle, Sparkles, WifiOff, X } from "lucide-react";
 import { albums, artistOf, artists, getAlbum, getArtist, getPodcast, getTrack, moods, playlists, podcasts, sample, songs, SOURCES, type SourceId } from "../lib/catalog";
 import { trackMenu } from "../lib/menus";
 import { cx } from "../lib/util";
@@ -9,6 +9,7 @@ import { usePlayer } from "../store/player";
 import { useSetting } from "../store/settings";
 import { nav, openDialog, toast, useUI } from "../store/ui";
 import { setSetting } from "../store/settings";
+import { BrandTile, SourceIcon, sourceBrand } from "../lib/brands";
 import { MediaCard, resolveItem, Shelf, ShelfCards, TrackTile, useCardWidth, type Item } from "../components/media";
 import { Badge, Btn, Chip, Cover, coverBg, Empty, IconBtn, SectionTitle } from "../components/ui";
 
@@ -115,7 +116,7 @@ function DeezerNotice() {
   return (
     <div className="relative mb-8 p-5 rounded-2xl bg-s1 flex items-center gap-4 overflow-hidden">
       <div className="absolute -left-10 -top-16 size-52 rounded-full blur-3xl opacity-25" style={{ background: "oklch(0.7 0.18 300)" }} />
-      <div className="relative size-12 rounded-xl grid place-items-center text-white font-bold shrink-0" style={{ background: "linear-gradient(140deg, oklch(0.65 0.17 300), oklch(0.42 0.14 330))" }}>D</div>
+      <BrandTile id="deezer" size={48} className="relative rounded-xl" />
       <div className="relative flex-1 min-w-0"><div className="flex items-center gap-2"><span className="font-semibold">Entre no Deezer</span><Badge tone="accent">Novo</Badge></div><div className="text-t3 text-[0.88rem]">Agora o MetroMusic toca direto da sua conta do Deezer: reprodução mais confiável, FLAC e letras palavra a palavra.</div></div>
       <Btn variant="primary" className="relative" onClick={() => openDialog("login", { service: "deezer" })}>Entrar no Deezer</Btn>
       <IconBtn label="Dispensar" size={32} className="relative" onClick={() => setSetting("deezerNoticeSeen", true)}><X /></IconBtn>
@@ -156,7 +157,7 @@ export default function Home() {
   const header = (
     <div className="flex items-end gap-4 mb-5">
       <div className="flex-1 min-w-0">
-        <div className="text-t3 font-medium flex items-center gap-2"><span className="size-2 rounded-full" style={{ background: `oklch(0.72 0.16 ${src.hue})` }} />{offlineView ? "Offline" : src.name}</div>
+        <div className="text-t3 font-medium flex items-center gap-2"><SourceIcon id={offlineView ? "offline" : src.id} size={16} />{offlineView ? "Offline" : src.name}</div>
         <h1 className="text-[2.1rem] font-bold tracking-tight leading-tight truncate">{greeting()}{lib.accounts.youtube ? `, ${lib.accounts.youtube}` : ""}</h1>
       </div>
       <IconBtn label="Atualizar" onClick={() => setNonce((n) => n + 1)}><RefreshCw /></IconBtn>
@@ -217,7 +218,7 @@ export default function Home() {
       </div>
       {needsLogin && (
         <div className="mb-8 p-5 rounded-2xl bg-s1 flex items-center gap-4">
-          <div className="size-12 rounded-full grid place-items-center text-white shrink-0" style={{ background: `oklch(0.6 0.16 ${src.hue})` }}><LogIn className="size-5" /></div>
+          <BrandTile id={sourceBrand(src.id)!} size={48} />
           <div className="flex-1 min-w-0"><div className="font-semibold">Entre no {src.name} para ver o seu início personalizado</div><div className="text-t3 text-[0.88rem]">Sem login, mostramos as recomendações gerais do serviço.</div></div>
           <Btn variant="primary" onClick={() => nav(`settings/${loginService}`)}>Conectar conta</Btn>
         </div>

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, Reorder } from "motion/react";
-import { AlarmClock, AudioLines, Bell, Check, ChevronRight, CircleUser, Database, Download, FlaskConical, FolderOpen, FolderPlus, Gauge, Globe, GripVertical, HardDrive, HeartPulse, Info, Languages, ListOrdered, Monitor, Moon, Music, Palette, Plug, Plus, RefreshCw, Search, Shield, Sun, SunMoon, Trash2, TriangleAlert, X, Code, Scale } from "lucide-react";
+import { AlarmClock, AudioLines, Bell, Check, ChevronRight, CircleUser, Database, Download, FlaskConical, FolderOpen, FolderPlus, Gauge, Globe, GripVertical, HardDrive, HeartPulse, Info, Languages, ListOrdered, Monitor, Moon, Music, Palette, Plug, Plus, RefreshCw, Search, Shield, Sun, SunMoon, Trash2, TriangleAlert, X, Code, Scale, ScrollText, Users } from "lucide-react";
 import { artistOf, SOURCES } from "../lib/catalog";
 import { AUDIO_PROVIDERS, DEFAULTS, PAGES, PALETTES, type Item, type Page } from "../lib/settingsSchema";
+import { BrandIcon, BrandTile, isBrand, lyricsBrand, SourceIcon } from "../lib/brands";
 import { iconFor } from "../lib/settingsIcons";
 import { cx, norm } from "../lib/util";
 import { SHORTCUTS } from "../components/Dialogs";
@@ -107,7 +108,7 @@ function ProviderHealth() {
       <div className="flex items-center gap-3 mb-3"><span className="text-t3 text-[0.84rem] flex-1">{at ? `Última verificação: ${at}` : "Verificando…"}</span><Btn size="sm" icon={<RefreshCw />} onClick={check}>Atualizar</Btn></div>
       {Object.entries(state).map(([id, s], i) => (
         <div key={id} className="flex items-center gap-3.5 h-14 border-b border-line last:border-0">
-          <span className="size-2.5 rounded-full" style={{ background: `oklch(0.72 0.16 ${SOURCES.find((x) => x.id === id)?.hue ?? 0})` }} />
+          <SourceIcon id={id} size={22} />
           <div className="flex-1"><div className="font-medium">{AUDIO_PROVIDERS[id]}</div><div className="text-t3 text-[0.8rem]">{["API e resolvedor", "API e 3 endpoints", "2 instâncias", "InnerTube", "API pública", "API pública"][i % 6]}</div></div>
           {i === 0 && <Badge tone="accent">1º da ordem</Badge>}
           {s.st !== "checking" && s.st !== "offline" && <span className="text-t3 text-[0.82rem] tnum">{s.ms} ms</span>}
@@ -132,7 +133,7 @@ function Integrations() {
   return (
     <div className="grid gap-3 p-1" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(17rem, 1fr))" }}>{cards.map(([id, name, desc, hue, acc]) => (
       <button key={id} onClick={() => nav(`settings/${id}`)} className="flex items-center gap-3.5 p-4 rounded-2xl bg-s2 hover:bg-s3 text-left transition-colors">
-        <div className="size-11 rounded-xl grid place-items-center text-white font-bold shrink-0" style={{ background: `linear-gradient(140deg, oklch(0.65 0.17 ${hue}), oklch(0.42 0.14 ${hue + 30}))` }}>{name[0]}</div>
+        {isBrand(id) ? <BrandTile id={id} size={44} /> : <span className="size-11 rounded-xl bg-s3 text-t2 grid place-items-center shrink-0"><Users className="size-5" /></span>}
         <div className="min-w-0 flex-1"><div className="font-semibold flex items-center gap-2">{name}{acc && accounts[acc] && <span className="size-2 rounded-full bg-ok" />}</div><div className="text-t3 text-[0.82rem] truncate">{acc && accounts[acc] ? `Conectado como ${accounts[acc]}` : desc}</div></div>
         <ChevronRight className="size-4 text-t3" />
       </button>))}</div>
@@ -143,7 +144,7 @@ function LoginCard({ service }: { service: string }) {
   const name = { discord: "Discord", lastfm: "Last.fm", spotify: "Spotify", tidal: "TIDAL", deezer: "Deezer", soundcloud: "SoundCloud" }[service] ?? service;
   return (
     <div className="flex items-center gap-4 p-4">
-      <div className={cx("size-11 rounded-full grid place-items-center", acc ? "bg-ok/15 text-ok" : "bg-s3 text-t3")}>{acc ? <Check className="size-5" /> : <CircleUser className="size-5" />}</div>
+      {isBrand(service) ? <BrandTile id={service} size={44} /> : <div className={cx("size-11 rounded-full grid place-items-center", acc ? "bg-ok/15 text-ok" : "bg-s3 text-t3")}>{acc ? <Check className="size-5" /> : <CircleUser className="size-5" />}</div>}
       <div className="flex-1"><div className="font-medium">{acc ? `Conectado como ${acc}` : `Não conectado ao ${name}`}</div><div className="text-t3 text-[0.84rem]">{acc ? "A sessão fica guardada só neste computador." : "Entre pela web ou cole um token/cookie."}</div></div>
       {acc ? <Btn variant="outline" onClick={() => { useLib.getState().setAccount(service, null); toast(`Desconectado do ${name}`); }}>Sair</Btn> : <Btn variant="primary" onClick={() => openDialog("login", { service })}>Entrar</Btn>}
     </div>
@@ -223,6 +224,7 @@ function OrderList({ item }: { item: Extract<Item, { t: "order" }> }) {
       {order.map((id, i) => (
         <Reorder.Item key={id} value={id} whileDrag={{ scale: 1.02, boxShadow: "0 10px 30px #0007", zIndex: 5 }} className="flex items-center gap-3 h-13 px-2.5 rounded-xl bg-s1 hover:bg-s2 cursor-grab active:cursor-grabbing relative">
           <GripVertical className="size-4 text-t3" /><span className="w-5 text-center text-t3 tnum text-[0.84rem] font-semibold">{i + 1}</span>
+          {item.k === "providerOrder" ? <SourceIcon id={id} size={22} /> : lyricsBrand(id) ? <BrandIcon id={lyricsBrand(id)!} size={22} /> : <ScrollText className="size-[1.35rem] text-t3 shrink-0" />}
           <span className={cx("flex-1 font-medium", off.includes(id) && "text-t3 line-through")}>{item.names[id]}</span>
           {item.offKey && <Switch on={!off.includes(id)} onChange={(on) => setSetting(item.offKey!, on ? off.filter((x) => x !== id) : [...off, id])} />}
         </Reorder.Item>))}
