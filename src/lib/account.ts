@@ -76,7 +76,11 @@ export async function initAccounts() {
   syncLikesAndHistory();
   try {
     const info = await engine.ytAccount();
-    if (info) setInfo(info); else if (useYt.getState().info) setInfo(null);
+    if (info) {
+      setInfo(info);
+      // traz as curtidas da conta a cada abertura (a lista local só recebia as da hora do login)
+      if (getSetting("ytSync") !== false) importLikes().catch(() => {});
+    } else if (useYt.getState().info) setInfo(null);
   } catch { /* sem rede: mantém o que estava guardado */ }
   // o estado de teste herdado ("cadu") não vale mais: só existe conta com sessão real
   if (!useYt.getState().info && useLib.getState().accounts.youtube) useLib.getState().setAccount("youtube", null);
