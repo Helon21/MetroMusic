@@ -1,0 +1,19 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "MetroMusic",
+        "width": 1360,
+        "height": 860,
+        "minWidth": 920,
+        "minHeight": 600,
+        "center": true,
+        "dragDropEnabled": false,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
+      }
+    ]
+  }
+}
