@@ -98,7 +98,7 @@ pub(super) fn context(c: &Client, visitor: &Option<String>) -> Value {
 /// `auth`: assina a requisição com a sessão da conta, se houver uma.
 pub(super) async fn post(endpoint: &str, c: &Client, visitor: &Option<String>, body: Value, auth: bool) -> Res<Value> {
     let mut req = CLIENT
-        .post(format!("{API}/{endpoint}?prettyPrint=false"))
+        .post(format!("{API}/{endpoint}{}prettyPrint=false", if endpoint.contains('?') { "&" } else { "?" }))
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .header("Accept-Language", "en-US,en;q=0.9")

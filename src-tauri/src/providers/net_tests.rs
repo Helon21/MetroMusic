@@ -186,3 +186,78 @@ async fn net_letras() {
     let raro = TrackInfo { provider: "youtube".into(), id: "x".into(), title: "zzzxqj faixa inexistente 91827".into(), artists: vec!["ninguem".into()], ..Default::default() };
     println!("LETRA inexistente: {:?}", crate::lyrics::get(&raro, &ordem).await.unwrap().is_some());
 }
+
+#[tokio::test]
+#[ignore]
+async fn net_conta_curtidas() {
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let info = super::ytmusic::account_info().await;
+    println!("CONTA: {:?}", info.as_ref().map(|i| i.name.clone()));
+    let p = super::ytmusic::library("songs").await.unwrap();
+    println!("CURTIDAS: {} faixas", p.tracks.len());
+}
+
+fn paths(v: &serde_json::Value, key: &str, here: String, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::Object(m) => for (k, x) in m { let p = format!("{here}.{k}"); if k == key { out.push(format!("{p} => {}", x.to_string().chars().take(160).collect::<String>())); } paths(x, key, p, out); },
+        serde_json::Value::Array(a) => for (i, x) in a.iter().enumerate() { paths(x, key, format!("{here}[{i}]"), out); },
+        _ => {}
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn net_conta_debug() {
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let v = super::ytmusic::debug_raw("FEmusic_liked_videos").await;
+    for key in ["continuations", "continuationItemRenderer", "nextContinuationData"] {
+        let mut o = vec![]; paths(&v, key, String::new(), &mut o);
+        println!("DBG {key}: {} achados", o.len()); for l in o.iter().take(4) { println!("DBG   {l}"); }
+    }
+    let mut o = vec![]; paths(&v, "musicShelfRenderer", String::new(), &mut o); println!("DBG shelves: {}", o.len());
+    let mut o = vec![]; paths(&v, "musicPlaylistShelfRenderer", String::new(), &mut o); println!("DBG plshelves: {}", o.len());
+}
+
+#[tokio::test]
+#[ignore]
+async fn net_conta_debug2() {
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let v = super::ytmusic::debug_raw("FEmusic_liked_videos").await;
+    let tok = v.pointer("/contents/singleColumnBrowseResultsRenderer/tabs/0/tabRenderer/content/sectionListRenderer/contents/0/musicShelfRenderer/continuations/0/nextContinuationData/continuation").and_then(|t| t.as_str()).unwrap().to_string();
+    let c = super::ytmusic::debug_raw_cont(&tok).await;
+    let sc = &c["continuationContents"]["musicShelfContinuation"];
+    println!("DBG2 shelf keys: {:?}", sc.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()));
+    println!("DBG2 contents len: {:?} first: {}", sc["contents"].as_array().map(|a| a.len()), sc["contents"][0].to_string().chars().take(300).collect::<String>());
+    println!("DBG2 chaves: {:?}", c.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()));
+    for key in ["musicShelfContinuation", "appendContinuationItemsAction", "musicPlaylistShelfContinuation", "musicResponsiveListItemRenderer", "continuationItemRenderer"] {
+        let mut o = vec![]; paths(&c, key, String::new(), &mut o);
+        println!("DBG2 {key}: {} achados {:?}", o.len(), o.first().map(|x| x.chars().take(140).collect::<String>()));
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn net_conta_vllm() {
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    for id in ["VLLM", "FEmusic_liked_videos"] {
+        let p = super::ytmusic::page(id).await;
+        println!("VLLM {id}: {:?}", p.map(|p| p.tracks.len()));
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn net_conta_tudo() {
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let t = std::time::Instant::now();
+    let songs = super::ytmusic::library("songs").await.unwrap();
+    println!("TUDO curtidas: {} em {:?}", songs.tracks.len(), t.elapsed());
+    let h = super::ytmusic::library("history").await.unwrap();
+    println!("TUDO histórico: {} dias, {} faixas, 1º dia: {:?}", h.sections.len(), h.sections.iter().map(|s| s.items.len()).sum::<usize>(), h.sections.first().map(|s| s.title.clone()));
+    for k in ["playlists", "albums", "artists"] { let p = super::ytmusic::library(k).await.unwrap(); println!("TUDO {k}: {} itens", p.items.len()); }
+}

@@ -180,6 +180,17 @@ async fn browse(body_extra: Value) -> Res<Value> {
     post("browse", &WEB_REMIX, &visitor, body, true).await
 }
 
+/// Próxima parte de uma lista longa. As listas da conta (curtidas, histórico) só respondem de verdade
+/// quando o token também vai na URL (`ctoken`, `continuation`, `type=next`); só no corpo a resposta vem vazia.
+async fn browse_more(token: &str) -> Res<Value> {
+    let visitor = visitor_data().await;
+    let mut ctx = context(&WEB_REMIX, &visitor);
+    if auth::is_logged_in() { if let Some(d) = auth::on_behalf_of() { ctx["user"]["onBehalfOfUser"] = json!(d); } }
+    let t = urlencoding::encode(token);
+    let endpoint = format!("browse?ctoken={t}&continuation={t}&type=next");
+    post(&endpoint, &WEB_REMIX, &visitor, json!({ "context": ctx, "continuation": token }), true).await
+}
+
 fn continuation_of(section_list: &Value) -> Option<String> {
     at(section_list, "continuations.0.nextContinuationData.continuation").and_then(|c| c.as_str()).map(str::to_string)
 }
@@ -271,9 +282,9 @@ pub async fn page(browse_id: &str) -> Res<Page> {
         tracks.extend(rows.into_iter().filter_map(|r| page_track(&r, album, &strapline, &artwork)));
         // playlists longas vêm em partes
         let mut guard = 0;
-        while let (Some(token), true) = (next.take(), kind != "artist" && guard < 8) {
+        while let (Some(token), true) = (next.take(), kind != "artist" && guard < 120) {
             guard += 1;
-            let more = browse(json!({ "continuation": token })).await?;
+            let more = browse_more(&token).await?;
             let cont = at(&more, "continuationContents.musicPlaylistShelfContinuation").or_else(|| at(&more, "continuationContents.musicShelfContinuation"));
             let (rows, token) = match cont {
                 Some(c) => shelf_rows(c),
@@ -282,7 +293,7 @@ pub async fn page(browse_id: &str) -> Res<Page> {
                     None => break,
                 },
             };
-            tracks.extend(rows.into_iter().filter_map(|r| page_track(&r, album, &strapline, &artwork)));
+                tracks.extend(rows.into_iter().filter_map(|r| page_track(&r, album, &strapline, &artwork)));
             next = token;
         }
     }
@@ -367,11 +378,31 @@ fn artist_rows(v: &Value) -> Vec<Item> {
 async fn history_sections() -> Res<Vec<Section>> {
     let v = browse(json!({ "browseId": "FEmusic_history" })).await?;
     let mut out = vec![];
+    let mut next = None;
     for shelf in find_all(&v, "musicShelfRenderer") {
         let title = shelf.get("title").map(runs_text).unwrap_or_default();
-        let (rows, _) = shelf_rows(shelf);
+        let (rows, token) = shelf_rows(shelf);
+        if token.is_some() { next = token; }
         let items: Vec<Item> = rows.iter().filter_map(|r| page_track(r, None, &[], &None)).map(track_item).collect();
         if !items.is_empty() { out.push(Section { title, label: None, layout: "list".into(), items, more: None }); }
+    }
+    // dias mais antigos vêm em partes; cada parte traz um ou mais dias
+    let mut guard = 0;
+    while let (Some(token), true) = (next.take(), guard < 40) {
+        guard += 1;
+        let more = browse_more(&token).await?;
+        let Some(c) = at(&more, "continuationContents.musicShelfContinuation").or_else(|| at(&more, "continuationContents.sectionListContinuation")) else { break };
+        let shelves = find_all(c, "musicShelfRenderer");
+        let mut groups: Vec<&Value> = if shelves.is_empty() { vec![c] } else { shelves };
+        for shelf in groups.drain(..) {
+            let title = shelf.get("title").map(runs_text).unwrap_or_default();
+            let (rows, token) = shelf_rows(shelf);
+            if token.is_some() { next = token; }
+            let items: Vec<Item> = rows.iter().filter_map(|r| page_track(r, None, &[], &None)).map(track_item).collect();
+            if items.is_empty() { continue; }
+            match out.last_mut() { Some(last) if title.is_empty() || last.title == title => last.items.extend(items), _ => out.push(Section { title, label: None, layout: "list".into(), items, more: None }) }
+        }
+        if next.is_none() { next = continuation_of(c); }
     }
     Ok(out)
 }
@@ -380,7 +411,8 @@ async fn history_sections() -> Res<Vec<Section>> {
 pub async fn library(kind: &str) -> Res<Page> {
     need_login()?;
     match kind {
-        "songs" => page("FEmusic_liked_videos").await.map(|mut p| { p.kind = "songs".into(); p }),
+        // "VLLM" é a playlist de curtidas como playlist comum: pagina até o fim (FEmusic_liked_videos para na 1ª parte)
+        "songs" => page("VLLM").await.map(|mut p| { p.kind = "songs".into(); p }),
         "playlists" => page("FEmusic_liked_playlists").await.map(|mut p| { p.kind = "playlists".into(); p }),
         "albums" => page("FEmusic_liked_albums").await.map(|mut p| { p.kind = "albums".into(); p }),
         "artists" => {
@@ -447,3 +479,8 @@ pub async fn mark_played(video_id: &str, played_secs: f64) -> Res<()> {
     call(playback, vec![]).await?;
     call(watch, vec![("st", "0".into()), ("et", until.clone())]).await
 }
+
+#[cfg(test)]
+pub async fn debug_raw(id: &str) -> Value { browse(json!({ "browseId": id })).await.unwrap() }
+#[cfg(test)]
+pub async fn debug_raw_cont(token: &str) -> Value { browse_more(token).await.unwrap() }
