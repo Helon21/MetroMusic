@@ -10,6 +10,8 @@ import Home from "./Home";
 import Library from "./Library";
 import RemoteCollection from "./RemoteCollection";
 import Settings from "./Settings";
+import YtExplore, { YtMood } from "./YtExplore";
+import { backend } from "../lib/engine";
 import { EqualizerPage, RecognizePage, TogetherPage } from "./Tools";
 export { Dialogs } from "../components/Dialogs";
 
@@ -21,10 +23,10 @@ function remote(kind: string, realId: string | undefined, why: string): ReactNod
 
 /** Converte a rota ("album/al3_1") na tela correspondente. */
 export function renderRoute(route: string): ReactNode {
-  const [head, a, b] = route.split("/");
+  const [head, a, b, c] = route.split("/");
   switch (head) {
     case "home": return <Home />;
-    case "explore": return <ExplorePage tab={a} />;
+    case "explore": return backend ? <YtExplore tab={a} /> : <ExplorePage tab={a} />;
     case "browse": return <BrowsePage id={a} />;
     case "search": return <SearchPage q={decodeURIComponent(a ?? "")} />;
     case "library": return <Library tab={a} />;
@@ -32,7 +34,7 @@ export function renderRoute(route: string): ReactNode {
     case "album": return !a || a.startsWith("extal:") ? remote("album", realAlbumId(a ?? ""), "Esta faixa não tem um álbum no YouTube Music (é um vídeo ou um single sem álbum).") : <AlbumPage id={a} />;
     case "artist": return a?.startsWith("ext:") ? remote("artist", realArtistId(a), "Este artista não tem página no YouTube Music.") : <ArtistPage id={a} view={b} />;
     case "podcast": return <PodcastPage id={a} />;
-    case "yt": return <RemoteCollection key={`${a}/${b}`} kind={a} id={b} />;
+    case "yt": if (a === "mood") return <YtMood key={b} params={decodeURIComponent(b ?? "")} title={decodeURIComponent(c ?? "")} />; return <RemoteCollection key={`${a}/${b}`} kind={a} id={b} />;
     case "history": return <HistoryPage />;
     case "stats": return <StatsPage />;
     case "wrapped": return <WrappedPage />;

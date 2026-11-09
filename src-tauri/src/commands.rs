@@ -162,3 +162,6 @@ pub async fn yt_rate(video_id: String, like: bool) -> Res<()> { ytmusic::rate(&v
 
 #[tauri::command]
 pub async fn yt_mark_played(video_id: String, played_secs: f64) -> Res<()> { ytmusic::mark_played(&video_id, played_secs).await }
+
+#[tauri::command]
+pub async fn yt_explore(browse_id: String, params: Option<String>) -> Res<ytmusic::Explore> { ytmusic::explore(&browse_id, params.as_deref()).await }

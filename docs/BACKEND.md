@@ -77,4 +77,5 @@ MM_AUTOTEST=1 pnpm tauri dev
 - Tidal, Qobuz, JioSaavn e Spotify não têm backend.
 - A raspagem do `client_id` do SoundCloud e os clientes do InnerTube podem quebrar quando os serviços mudarem; as constantes vêm do MetroFuse e precisam acompanhá-lo.
 - Letras reais só de BetterLyrics e LrcLib; os outros provedores da lista (Apple, Musixmatch, QQ, KuGou…) não foram portados. Letras de faixas de demonstração continuam simuladas; tradução, edição e busca manual ainda são simuladas.
-- Contas e histórico ainda são simulados.
+- Contas: só o YouTube Music tem login real (cookie via janela do Google, ou colado), com biblioteca, histórico oficial, curtidas e Recaps. SoundCloud, Last.fm, Deezer e Spotify ainda são simulados.
+- Explorar usa o YouTube Music (início, lançamentos, paradas, climas e gêneros, videoclipes). O Recap em vídeo 9:16 do YouTube não tem API conhecida; a Retrospectiva monta os slides com os dados dos Recaps reais.

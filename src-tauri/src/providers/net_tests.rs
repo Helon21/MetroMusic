@@ -344,3 +344,44 @@ async fn net_conta_recap3() {
     let min: u64 = p.tracks.iter().filter_map(|t| t.duration_ms).sum::<u64>() / 60000;
     println!("RECAP3 {:?}: {} faixas, {} min, com álbum {}, 1ª {:?}", p.title, p.tracks.len(), min, p.tracks.iter().filter(|t| t.album.is_some()).count(), p.tracks.first().map(|t| (&t.title, &t.artists)));
 }
+
+#[tokio::test]
+#[ignore]
+async fn net_explorar() {
+    use std::collections::BTreeMap;
+    fn count(v: &serde_json::Value, m: &mut BTreeMap<String, usize>) {
+        match v {
+            serde_json::Value::Object(o) => for (k, x) in o { if k.ends_with("Renderer") && matches!(k.as_str(), "musicCarouselShelfRenderer"|"musicShelfRenderer"|"gridRenderer"|"musicNavigationButtonRenderer"|"musicTwoRowItemRenderer"|"musicResponsiveListItemRenderer"|"musicPlaylistShelfRenderer"|"musicCardShelfRenderer"|"musicImmersiveCarouselShelfRenderer") { *m.entry(k.clone()).or_default() += 1; } count(x, m); },
+            serde_json::Value::Array(a) => a.iter().for_each(|x| count(x, m)),
+            _ => {}
+        }
+    }
+    for id in ["FEmusic_explore", "FEmusic_new_releases", "FEmusic_new_releases_albums", "FEmusic_new_releases_videos", "FEmusic_charts", "FEmusic_moods_and_genres"] {
+        match super::ytmusic::debug_try(id).await { Ok(v) => { let mut m = BTreeMap::new(); count(&v, &mut m); println!("EXP {id}: {m:?}"); } Err(e) => println!("EXP {id}: erro {e}") }
+    }
+    let v = super::ytmusic::debug_try("FEmusic_moods_and_genres").await.unwrap();
+    let mut o = vec![]; paths(&v, "musicNavigationButtonRenderer", String::new(), &mut o);
+    println!("EXP tile ex: {}", o.first().map(|s| s.chars().take(500).collect::<String>()).unwrap_or_default());
+    let mut o = vec![]; paths(&v, "gridHeaderRenderer", String::new(), &mut o); println!("EXP grid headers: {}", o.len());
+}
+
+#[tokio::test]
+#[ignore]
+async fn net_explorar2() {
+    for (id, p) in [("FEmusic_explore", None), ("FEmusic_new_releases_albums", None), ("FEmusic_new_releases_videos", None), ("FEmusic_charts", None), ("FEmusic_moods_and_genres", None), ("FEmusic_moods_and_genres_category", Some("ggMPOg1uX1JOQWZFeDByc2Jm"))] {
+        match super::ytmusic::explore(id, p).await {
+            Ok(e) => println!("EXP2 {id}: {} seções [{}], {} grupos [{}]", e.sections.len(), e.sections.iter().map(|s| format!("{}({} {})", s.title, s.items.len(), s.layout)).collect::<Vec<_>>().join("; "), e.groups.len(), e.groups.iter().map(|g| format!("{}({})", g.title, g.tiles.len())).collect::<Vec<_>>().join("; ")),
+            Err(er) => println!("EXP2 {id}: erro {er}"),
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn net_explorar3() {
+    let v = super::ytmusic::debug_try("FEmusic_charts").await.unwrap();
+    let mut o = vec![]; paths(&v, "musicShelfRenderer", String::new(), &mut o);
+    println!("EXP3 shelf: {}", o.first().map(|s| s.chars().take(900).collect::<String>()).unwrap_or_default());
+    let mut o = vec![]; paths(&v, "musicCarouselShelfRenderer", String::new(), &mut o); println!("EXP3 carrosséis: {}", o.len());
+    for l in &o { println!("EXP3  {}", l.chars().take(150).collect::<String>()); }
+}

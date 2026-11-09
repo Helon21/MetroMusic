@@ -11,7 +11,9 @@ export const backend = isTauri;
 export interface RCollection { kind: "album" | "playlist" | "artist" | "mix"; id: string; title: string; subtitle: string; artwork?: string | null }
 export interface YtAccountInfo { name: string; email?: string | null; handle?: string | null; avatar?: string | null }
 export interface RItem { track?: ExtInfo; collection?: RCollection }
-export interface RSection { title: string; label?: string | null; layout: "list" | "carousel"; items: RItem[]; more?: string | null }
+export interface RSection { title: string; label?: string | null; layout: "list" | "carousel" | "grid"; items: RItem[]; more?: string | null }
+export interface RTile { title: string; browseId: string; params?: string | null; color?: string | null }
+export interface RExplore { title: string; sections: RSection[]; groups: { title: string; tiles: RTile[] }[] }
 export interface RChip { title: string; browseId: string; params?: string | null }
 export interface RHome { chips: RChip[]; sections: RSection[]; continuation?: string | null; personalized: boolean }
 export interface RPage { kind: string; id: string; title: string; subtitle: string; description?: string | null; artwork?: string | null; tracks: ExtInfo[]; sections: RSection[]; items: RItem[] }
@@ -45,6 +47,7 @@ export const engine = {
   ytLibrary: (kind: "songs" | "playlists" | "albums" | "artists" | "history") => invoke<RPage>("yt_library", { kind }),
   ytRate: (videoId: string, like: boolean) => invoke("yt_rate", { videoId, like }),
   ytMarkPlayed: (videoId: string, playedSecs: number) => invoke("yt_mark_played", { videoId, playedSecs }),
+  ytExplore: (browseId: string, params?: string | null) => invoke<RExplore>("yt_explore", { browseId, params }),
   ytHome: (chip?: RChip | null, continuation?: string | null) => invoke<RHome>("yt_home", { chipBrowseId: chip?.browseId, chipParams: chip?.params, continuation }),
   ytPage: (browseId: string) => invoke<RPage>("yt_page", { browseId }),
   ytRadio: (videoId?: string | null, playlistId?: string | null) => invoke<ExtInfo[]>("yt_radio", { videoId, playlistId }),

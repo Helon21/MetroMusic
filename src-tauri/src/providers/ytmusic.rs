@@ -175,7 +175,10 @@ fn carousel(shelf: &Value) -> Option<Section> {
     let mut list = false;
     for c in shelf.get("contents").and_then(|c| c.as_array()).into_iter().flatten() {
         if let Some(r) = c.get("musicTwoRowItemRenderer") { items.extend(two_row(r)); }
-        else if let Some(r) = c.get("musicResponsiveListItemRenderer") { if let Some(t) = parse_item(r) { list = true; items.push(track_item(t)); } }
+        else if let Some(r) = c.get("musicResponsiveListItemRenderer") {
+            if let Some(t) = parse_item(r) { list = true; items.push(track_item(t)); }
+            else if let Some(a) = artist_row(r) { items.push(a); }
+        }
     }
     if items.is_empty() { return None; }
     Some(Section { title, label, layout: if list { "list" } else { "carousel" }.into(), items, more })
@@ -348,6 +351,70 @@ pub async fn radio(video_id: Option<&str>, playlist_id: Option<&str>) -> Res<Vec
     }).collect())
 }
 
+// ───────── Explorar
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Tile {
+    pub title: String,
+    pub browse_id: String,
+    pub params: Option<String>,
+    /// Cor do bloco, "#rrggbb"
+    pub color: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TileGroup { pub title: String, pub tiles: Vec<Tile> }
+
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Explore { pub title: String, pub sections: Vec<Section>, pub groups: Vec<TileGroup> }
+
+fn tiles_of(items: &[Value]) -> Vec<Tile> {
+    items.iter().filter_map(|i| i.get("musicNavigationButtonRenderer")).filter_map(|b| {
+        let title = b.get("buttonText").map(runs_text).filter(|t| !t.is_empty())?;
+        let e = at(b, "clickCommand.browseEndpoint")?;
+        let color = at(b, "solid.leftStripeColor").and_then(|c| c.as_u64()).map(|c| format!("#{:06x}", c & 0xFF_FFFF));
+        Some(Tile { title, browse_id: e.get("browseId")?.as_str()?.to_string(), params: e.get("params").and_then(|p| p.as_str()).map(str::to_string), color })
+    }).collect()
+}
+
+/// Páginas de Explorar: início, lançamentos, paradas, climas e gêneros (e a página de cada clima).
+/// Devolve prateleiras (músicas, álbuns, playlists, vídeos) e/ou grupos de blocos de navegação.
+pub async fn explore(browse_id: &str, params: Option<&str>) -> Res<Explore> {
+    let mut body = json!({ "browseId": browse_id });
+    if let Some(p) = params { body["params"] = json!(p); }
+    let v = browse(body).await?;
+    let mut out = Explore { title: at(&v, "header.musicHeaderRenderer.title").map(runs_text).unwrap_or_default(), ..Default::default() };
+    // carrosséis: cartões, listas de músicas ou blocos de navegação
+    for shelf in find_all(&v, "musicCarouselShelfRenderer") {
+        let contents = shelf.get("contents").and_then(|c| c.as_array()).cloned().unwrap_or_default();
+        let tiles = tiles_of(&contents);
+        if !tiles.is_empty() {
+            let title = at(shelf, "header.musicCarouselShelfBasicHeaderRenderer.title").and_then(first_run).unwrap_or_default();
+            out.groups.push(TileGroup { title, tiles });
+        } else if let Some(sec) = carousel(shelf) { out.sections.push(sec); }
+    }
+    // listas (ex.: "Músicas em alta" nas paradas)
+    for shelf in find_all(&v, "musicShelfRenderer") {
+        let title = shelf.get("title").map(runs_text).unwrap_or_default();
+        let items: Vec<Item> = shelf_rows(shelf).0.iter().filter_map(|r| page_track(r, None, &[], &None).or_else(|| parse_item(r))).map(track_item).collect();
+        if !items.is_empty() { out.sections.push(Section { title, label: None, layout: "list".into(), items, more: None }); }
+    }
+    // grades: cartões (lançamentos, vídeos) ou blocos de navegação (climas e gêneros)
+    for grid in find_all(&v, "gridRenderer") {
+        let list = grid.get("items").and_then(|i| i.as_array()).cloned().unwrap_or_default();
+        let title = at(grid, "header.gridHeaderRenderer.title").map(runs_text).unwrap_or_default();
+        let tiles = tiles_of(&list);
+        if !tiles.is_empty() { out.groups.push(TileGroup { title, tiles }); continue; }
+        let items: Vec<Item> = list.iter().filter_map(|i| i.get("musicTwoRowItemRenderer")).filter_map(two_row).collect();
+        if !items.is_empty() { out.sections.push(Section { title, label: None, layout: "grid".into(), items, more: None }); }
+    }
+    if out.sections.is_empty() && out.groups.is_empty() { return Err("o YouTube Music não devolveu conteúdo para esta página".into()); }
+    Ok(out)
+}
+
 // ───────── Conta, biblioteca, histórico e curtidas (exigem sessão)
 
 #[derive(Serialize, Clone, Debug)]
@@ -375,18 +442,21 @@ pub async fn account_info() -> Res<AccountInfo> {
     })
 }
 
+/// Linha de lista que representa um artista (canal `UC…`), como na biblioteca e nas paradas.
+fn artist_row(r: &Value) -> Option<Item> {
+    let id = at(r, "navigationEndpoint.browseEndpoint.browseId").and_then(|b| b.as_str())?.to_string();
+    if !id.starts_with("UC") { return None; }
+    let col = |i: usize| at(r, &format!("flexColumns.{i}.musicResponsiveListItemFlexColumnRenderer.text"));
+    let title = first_run(col(0)?)?;
+    let subtitle = col(1).map(runs_text).unwrap_or_default();
+    Some(collection("artist", &id, title, subtitle, thumb(r)))
+}
+
 /// Artistas que o usuário segue: linhas de lista com `browseId` de canal.
 fn artist_rows(v: &Value) -> Vec<Item> {
     let mut shelves = find_all(v, "musicShelfRenderer");
     shelves.extend(find_all(v, "musicPlaylistShelfRenderer"));
-    shelves.iter().flat_map(|s| shelf_rows(s).0).filter_map(|r| {
-        let id = at(&r, "navigationEndpoint.browseEndpoint.browseId").and_then(|b| b.as_str())?.to_string();
-        if !id.starts_with("UC") { return None; }
-        let col = |i: usize| at(&r, &format!("flexColumns.{i}.musicResponsiveListItemFlexColumnRenderer.text"));
-        let title = first_run(col(0)?)?;
-        let subtitle = col(1).map(runs_text).unwrap_or_default();
-        Some(collection("artist", &id, title, subtitle, thumb(&r)))
-    }).collect()
+    shelves.iter().flat_map(|s| shelf_rows(s).0).filter_map(|r| artist_row(&r)).collect()
 }
 
 /// Seções do histórico (uma por dia: "Hoje", "Ontem"...).
