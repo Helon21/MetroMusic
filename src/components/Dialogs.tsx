@@ -8,6 +8,7 @@ import { useLib } from "../store/library";
 import { usePlayer } from "../store/player";
 import { BrandTile, SourceIcon, type BrandId } from "../lib/brands";
 import { cancelLogin, loginCookie, loginWeb, logout, useYt } from "../lib/account";
+import { loginLastfm, useLastfm } from "../lib/lastfm";
 import { isTauri, toggleMiniWindow } from "../lib/native";
 import { getSetting, setSetting, useSetting } from "../store/settings";
 import { nav, toast, useUI } from "../store/ui";
@@ -287,8 +288,29 @@ function YtLogin({ close }: P) {
     </Modal>
   );
 }
+function LastfmLogin({ close }: P) {
+  const { hasKeys, busy, error } = useLastfm();
+  const [user, setUser] = useState(""); const [pass, setPass] = useState(""); const [key, setKey] = useState(""); const [secret, setSecret] = useState("");
+  const needKeys = !hasKeys;
+  const go = () => loginLastfm(user.trim(), pass, key, secret);
+  const ready = user.trim() && pass && (!needKeys || (key.trim() && secret.trim()));
+  return (
+    <Modal title="Entrar no Last.fm" width={460} onClose={close}>
+      <div className="flex justify-center mb-5"><BrandTile id="lastfm" size={64} className="rounded-2xl" /></div>
+      {busy ? <div className="grid place-items-center h-36 gap-3 text-t2"><Spinner className="size-7" />Entrando…</div> : (<>
+        {needKeys && <><p className="text-t2 text-[0.88rem] mb-3">O Last.fm exige uma chave de API para cada app. Crie a sua (grátis) em <b>last.fm/api/account/create</b> e cole abaixo. Isso é pedido só uma vez.</p>
+          <Field label="Chave da API"><TextField value={key} onChange={setKey} /></Field><Field label="Segredo compartilhado"><TextField secret value={secret} onChange={setSecret} /></Field></>}
+        <Field label="Usuário"><TextField autoFocus={!needKeys} value={user} onChange={setUser} /></Field>
+        <Field label="Senha" hint="A senha é enviada só ao Last.fm para abrir a sessão e não fica guardada."><TextField secret value={pass} onChange={setPass} onEnter={() => ready && go()} /></Field>
+        {error && <p className="mb-3 text-[0.86rem] text-danger">{error}</p>}
+        <Btn variant="primary" className="w-full" disabled={!ready} onClick={go}>Entrar</Btn>
+      </>)}
+    </Modal>
+  );
+}
 function Login(p: P) {
   if (p.props.service === "youtube" && isTauri) return <YtLogin {...p} />;
+  if (p.props.service === "lastfm" && isTauri) return <LastfmLogin {...p} />;
   return <LoginMock {...p} />;
 }
 function LoginMock({ props, close }: P) {

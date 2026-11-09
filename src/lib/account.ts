@@ -20,6 +20,8 @@ interface S {
   epoch: number;
 }
 let importing = false;
+/** true enquanto as curtidas da conta estão sendo importadas (não devem voltar para a conta como "novas"). */
+export const isImportingLikes = () => importing;
 const KEY = "metromusic-yt-account-v1";
 const saved = (): YtAccount | null => { try { return JSON.parse(localStorage.getItem(KEY) ?? "null"); } catch { return null; } };
 export const useYt = create<S>(() => ({ info: saved(), status: "idle", error: null, epoch: 0 }));

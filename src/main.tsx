@@ -3,6 +3,7 @@ import "./styles.css";
 import App from "./App";
 import Mini from "./pages/Mini";
 import { initAccounts, loginWeb } from "./lib/account";
+import { initLastfm } from "./lib/lastfm";
 import { invoke } from "./lib/native";
 import { startBridge } from "./lib/bridge";
 import { getPlaylist, loadExternalTracks } from "./lib/catalog";
@@ -30,6 +31,7 @@ if (new URLSearchParams(location.search).has("mini") || location.hash === "#mini
   startBridge();
   initBackend();
   initAccounts();
+  initLastfm();
   if (import.meta.env.DEV && (window as any).__TAURI_INTERNALS__) invoke<boolean>("dev_flag", { name: "MM_AUTOLOGIN" }).then((on) => on && loginWeb());
   root.render(<App />);
   // Em desenvolvimento, `MM_AUTOTEST=1 pnpm tauri dev` roda o teste do fluxo de reprodução e escreve no log.

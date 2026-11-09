@@ -385,3 +385,12 @@ async fn net_explorar3() {
     let mut o = vec![]; paths(&v, "musicCarouselShelfRenderer", String::new(), &mut o); println!("EXP3 carrosséis: {}", o.len());
     for l in &o { println!("EXP3  {}", l.chars().take(150).collect::<String>()); }
 }
+
+#[tokio::test]
+#[ignore]
+async fn net_lastfm_chave_invalida() {
+    // sem credenciais reais: confirma que a requisição assinada chega e o erro da API é lido
+    let r = crate::lastfm::login(Some("00000000000000000000000000000000".into()), Some("11111111111111111111111111111111".into()), "x", "y").await;
+    println!("LASTFM {:?}", r);
+    assert!(r.is_err());
+}

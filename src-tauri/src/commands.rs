@@ -165,3 +165,29 @@ pub async fn yt_mark_played(video_id: String, played_secs: f64) -> Res<()> { ytm
 
 #[tauri::command]
 pub async fn yt_explore(browse_id: String, params: Option<String>) -> Res<ytmusic::Explore> { ytmusic::explore(&browse_id, params.as_deref()).await }
+
+// ───────── Last.fm
+
+#[tauri::command]
+pub fn lastfm_status() -> crate::lastfm::Status { crate::lastfm::status() }
+
+#[tauri::command]
+pub async fn lastfm_login(api_key: Option<String>, secret: Option<String>, username: String, password: String) -> Res<String> {
+    crate::lastfm::login(api_key, secret, &username, &password).await
+}
+
+#[tauri::command]
+pub fn lastfm_logout() { crate::lastfm::logout() }
+
+#[tauri::command]
+pub async fn lastfm_now_playing(artist: String, track: String, album: Option<String>, duration: Option<u64>) -> Res<()> {
+    crate::lastfm::now_playing(&artist, &track, album.as_deref(), duration).await
+}
+
+#[tauri::command]
+pub async fn lastfm_scrobble(artist: String, track: String, timestamp: u64, album: Option<String>, duration: Option<u64>) -> Res<()> {
+    crate::lastfm::scrobble(&artist, &track, timestamp, album.as_deref(), duration).await
+}
+
+#[tauri::command]
+pub async fn lastfm_love(artist: String, track: String, love: bool) -> Res<()> { crate::lastfm::love(&artist, &track, love).await }

@@ -11,6 +11,7 @@ mod audio;
 mod cache;
 mod commands;
 mod http;
+mod lastfm;
 mod lyrics;
 mod model;
 mod playback;
@@ -217,7 +218,7 @@ pub fn run() {
             commands::search_online, commands::audio_play, commands::audio_pause, commands::audio_resume, commands::audio_seek,
             commands::audio_stop, commands::audio_set_volume, commands::audio_set_speed, commands::audio_precache,
             commands::cache_stats, commands::cache_clear, commands::cache_configure,
-            commands::yt_home, commands::yt_page, commands::yt_radio, commands::lyrics_get, commands::yt_login_start, commands::yt_login_cancel, commands::yt_login_cookie, commands::yt_account, commands::yt_logout, commands::yt_library, commands::yt_rate, commands::yt_mark_played, commands::yt_explore,
+            commands::yt_home, commands::yt_page, commands::yt_radio, commands::lyrics_get, commands::yt_login_start, commands::yt_login_cancel, commands::yt_login_cookie, commands::yt_account, commands::yt_logout, commands::yt_library, commands::yt_rate, commands::yt_mark_played, commands::yt_explore, commands::lastfm_status, commands::lastfm_login, commands::lastfm_logout, commands::lastfm_now_playing, commands::lastfm_scrobble, commands::lastfm_love,
         ])
         .setup(|app| {
             // Motor de áudio e cache. Os eventos `audio:*` chegam a todas as janelas.
@@ -227,6 +228,7 @@ pub fn run() {
             app.manage(playback::Player::new(cache_dir, 4096, emit));
             // Sessão do YouTube Music guardada de uma execução anterior.
             providers::auth::init(app.path().app_data_dir()?.join("youtube-auth.json"));
+            lastfm::init(app.path().app_data_dir()?.join("lastfm.json"));
             // Sem bandeja (ex.: ambiente sem appindicator) o app segue funcionando; só não esconde a janela.
             if let Err(e) = setup_tray(app.handle()) {
                 eprintln!("[bandeja] indisponível: {e}");
