@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Music, Play, WifiOff } from "lucide-react";
 import { registerTrack } from "../lib/catalog";
 import { useYt } from "../lib/account";
+import { useSc } from "../lib/soundcloud";
 import { engine, type RPage } from "../lib/engine";
 import { Grid, TrackList } from "../components/media";
 import { RemoteCard } from "../components/remote";
@@ -13,9 +14,10 @@ const cache = new Map<string, RPage>();
 const idOf = (t: { provider: string; id: string }) => `${t.provider}:${t.id}`;
 
 /** Biblioteca ou histórico REAIS da conta do YouTube Music. */
-export default function YtLibraryView({ kind, filter = "" }: { kind: YtKind; filter?: string }) {
-  const epoch = useYt((s) => s.epoch);
-  const key = `${epoch}:${kind}`;
+export default function YtLibraryView({ kind, filter = "", provider = "youtube" }: { kind: YtKind; filter?: string; provider?: "youtube" | "soundcloud" }) {
+  const ytEpoch = useYt((s) => s.epoch), scEpoch = useSc((s) => s.epoch);
+  const epoch = provider === "soundcloud" ? scEpoch : ytEpoch;
+  const key = `${provider}:${epoch}:${kind}`;
   const [page, setPage] = useState<RPage | null>(cache.get(key) ?? null);
   const [error, setError] = useState("");
   const [nonce, setNonce] = useState(0);
@@ -24,14 +26,14 @@ export default function YtLibraryView({ kind, filter = "" }: { kind: YtKind; fil
     const hit = nonce === 0 ? cache.get(key) : undefined;
     if (hit) { setPage(hit); return; }
     setPage(null); setError("");
-    engine.ytLibrary(kind).then((p) => {
+    (provider === "soundcloud" ? engine.scLibrary(kind as "songs" | "playlists" | "history") : engine.ytLibrary(kind)).then((p) => {
       if (!p || dead) return;
       p.tracks.forEach((t) => registerTrack(t));
       p.sections.forEach((s) => s.items.forEach((i) => i.track && registerTrack(i.track)));
       cache.set(key, p); setPage(p);
     }).catch((e) => !dead && setError(String(e)));
     return () => { dead = true; };
-  }, [key, kind, nonce]);
+  }, [key, kind, provider, nonce]);
 
   if (error) return <Empty icon={<WifiOff />} title="Não foi possível carregar" text={error}><Btn variant="primary" onClick={() => { cache.delete(key); setNonce((n) => n + 1); }}>Tentar de novo</Btn></Empty>;
   if (!page) return <div className="grid place-items-center h-48 text-t3"><Spinner className="size-7" /></div>;

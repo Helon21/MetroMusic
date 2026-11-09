@@ -21,12 +21,12 @@ export function registerPage(p: RPage) {
   return p;
 }
 
-export const routeOf = (c: RCollection) => `yt/${c.kind}/${c.id}`;
+export const routeOf = (c: RCollection) => `yt/${c.kind}/${encodeURIComponent(c.id)}`;
 
 /** Busca as músicas de um álbum, playlist ou mix e começa a tocar. */
 export async function playCollection(c: RCollection, shuffle = false) {
   try {
-    const tracks = c.kind === "mix" ? await engine.ytRadio(null, c.id) : (await engine.ytPage(c.id))?.tracks;
+    const tracks = c.kind === "mix" ? await engine.ytRadio(null, c.id) : (c.id.startsWith("sc:") ? await engine.scPlaylist(c.id) : await engine.ytPage(c.id))?.tracks;
     const ids = (tracks ?? []).map((t) => registerTrack(t).id);
     if (!ids.length) return toast("Não há músicas para tocar aqui");
     usePlayer.getState().play(ids, 0, c.title, shuffle ? { shuffle: true } : undefined);

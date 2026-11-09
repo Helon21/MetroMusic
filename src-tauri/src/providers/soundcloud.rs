@@ -68,21 +68,23 @@ async fn meta(force: bool) -> Res<Meta> {
 }
 
 /// GET na API v2 com `client_id` e `app_version`. Se o `client_id` foi revogado, raspa de novo e repete uma vez.
-async fn api(url: &str, params: &[(&str, String)]) -> Res<Value> {
+pub(super) async fn api(url: &str, params: &[(&str, String)]) -> Res<Value> {
     for attempt in 0..2 {
         let m = meta(attempt == 1).await?;
         let mut q: Vec<(&str, String)> = params.to_vec();
         q.push(("client_id", m.client_id.clone()));
         q.push(("app_locale", "en".into()));
         if let Some(v) = &m.app_version { q.push(("app_version", v.clone())); }
-        let resp = CLIENT
+        let mut req = CLIENT
             .get(url)
             .query(&q)
             .header("Accept", "application/json")
             .header("Referer", "https://soundcloud.com/")
             .header("Origin", "https://soundcloud.com")
-            .header("User-Agent", BROWSER_UA)
-            .send().await.map_err(err)?;
+            .header("User-Agent", BROWSER_UA);
+        // com sessão, a API devolve o que é da conta (curtidas, playlists) e o áudio completo de faixas Go+
+        if let Some(t) = super::sc_account::token() { req = req.header("Authorization", format!("OAuth {t}")); }
+        let resp = req.send().await.map_err(err)?;
         let status = resp.status();
         if matches!(status.as_u16(), 401 | 403 | 429) && attempt == 0 {
             continue;
@@ -105,7 +107,7 @@ fn text(v: &Value, k: &str) -> Option<String> {
     v.get(k).and_then(|x| x.as_str()).map(str::trim).filter(|x| !x.is_empty()).map(str::to_string)
 }
 
-fn to_track(v: &Value) -> Option<TrackInfo> {
+pub(super) fn to_track(v: &Value) -> Option<TrackInfo> {
     if v.get("kind").and_then(|k| k.as_str()) != Some("track") { return None; }
     if v.get("streamable").and_then(|s| s.as_bool()) == Some(false) { return None; }
     // `SNIP` é só um trecho de faixa paga; não há nada completo para tocar.
@@ -141,6 +143,16 @@ fn to_track(v: &Value) -> Option<TrackInfo> {
         preview_url: None,
         ..Default::default()
     })
+}
+
+/// PUT/DELETE autenticado (curtir e descurtir). Exige sessão.
+pub(super) async fn api_write(method: reqwest::Method, url: &str) -> Res<()> {
+    let token = super::sc_account::token().ok_or("entre na sua conta do SoundCloud primeiro")?;
+    let m = meta(false).await?;
+    let resp = CLIENT.request(method, url).query(&[("client_id", m.client_id.as_str())])
+        .header("Authorization", format!("OAuth {token}")).header("Referer", "https://soundcloud.com/").header("Origin", "https://soundcloud.com").header("User-Agent", BROWSER_UA)
+        .send().await.map_err(err)?;
+    if resp.status().is_success() { Ok(()) } else { Err(format!("SoundCloud HTTP {}", resp.status())) }
 }
 
 pub async fn search(query: &str, limit: usize) -> Res<Vec<TrackInfo>> {

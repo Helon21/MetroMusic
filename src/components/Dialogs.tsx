@@ -9,6 +9,7 @@ import { usePlayer } from "../store/player";
 import { BrandTile, SourceIcon, type BrandId } from "../lib/brands";
 import { cancelLogin, loginCookie, loginWeb, logout, useYt } from "../lib/account";
 import { loginLastfm, useLastfm } from "../lib/lastfm";
+import { cancelScLogin, loginScToken, loginScWeb, useSc } from "../lib/soundcloud";
 import { isTauri, toggleMiniWindow } from "../lib/native";
 import { getSetting, setSetting, useSetting } from "../store/settings";
 import { nav, toast, useUI } from "../store/ui";
@@ -288,6 +289,24 @@ function YtLogin({ close }: P) {
     </Modal>
   );
 }
+function ScLogin({ close }: P) {
+  const { status, error, info } = useSc();
+  const [mode, setMode] = useState<"web" | "token">("web"); const [token, setToken] = useState("");
+  useEffect(() => { if (info) close(); }, [info]); // eslint-disable-line react-hooks/exhaustive-deps
+  const busy = status !== "idle";
+  return (
+    <Modal title="Entrar no SoundCloud" width={460} onClose={() => { if (status === "waiting") cancelScLogin(); close(); }}>
+      <div className="flex justify-center mb-5"><BrandTile id="soundcloud" size={64} className="rounded-2xl" /></div>
+      <div className="flex justify-center mb-5"><div className="inline-flex p-1 rounded-full bg-s2">{(["web", "token"] as const).map((m) => <button key={m} onClick={() => !busy && setMode(m)} className={cx("h-8 px-4 rounded-full text-[0.86rem] font-medium", mode === m ? "bg-accent text-accent-fg" : "text-t2")}>{m === "web" ? "Login pela web" : "Colar token"}</button>)}</div></div>
+      {status === "waiting" ? (
+        <div className="grid place-items-center gap-3 text-t2 py-4 text-center"><Spinner className="size-7" /><div>Termine o login na janela do SoundCloud que abriu.<br /><span className="text-t3 text-[0.86rem]">Ela fecha sozinha quando a conta for reconhecida.</span></div><Btn variant="ghost" onClick={cancelScLogin}>Cancelar</Btn></div>
+      ) : status === "checking" ? <div className="grid place-items-center h-36 gap-3 text-t2"><Spinner className="size-7" />Verificando a sessão…</div>
+      : mode === "web" ? (<><p className="text-t2 text-center mb-3">Uma janela do SoundCloud vai abrir para você entrar. O MetroMusic guarda só a sessão, neste computador.</p><p className="text-t3 text-[0.82rem] text-center mb-5">Se você entra com Google, Facebook ou Apple, o SoundCloud pode recusar a janela: use “Colar token”.</p><Btn variant="primary" className="w-full" icon={<LogIn />} onClick={loginScWeb}>Continuar no SoundCloud</Btn></>)
+      : (<><Field label="Token OAuth" hint="Em soundcloud.com já logado, abra o F12 › Aplicativo › Cookies e copie o valor do cookie oauth_token."><TextField multiline value={token} onChange={setToken} placeholder="2-123456-…" /></Field><Btn variant="primary" className="w-full" disabled={!token.trim()} onClick={() => loginScToken(token)}>Salvar e conectar</Btn></>)}
+      {error && <p className="mt-4 text-[0.86rem] text-danger text-center">{error}</p>}
+    </Modal>
+  );
+}
 function LastfmLogin({ close }: P) {
   const { hasKeys, busy, error } = useLastfm();
   const [user, setUser] = useState(""); const [pass, setPass] = useState(""); const [key, setKey] = useState(""); const [secret, setSecret] = useState("");
@@ -311,6 +330,7 @@ function LastfmLogin({ close }: P) {
 function Login(p: P) {
   if (p.props.service === "youtube" && isTauri) return <YtLogin {...p} />;
   if (p.props.service === "lastfm" && isTauri) return <LastfmLogin {...p} />;
+  if (p.props.service === "soundcloud" && isTauri) return <ScLogin {...p} />;
   return <LoginMock {...p} />;
 }
 function LoginMock({ props, close }: P) {

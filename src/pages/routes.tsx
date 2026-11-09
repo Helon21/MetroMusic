@@ -34,7 +34,7 @@ export function renderRoute(route: string): ReactNode {
     case "album": return !a || a.startsWith("extal:") ? remote("album", realAlbumId(a ?? ""), "Esta faixa não tem um álbum no YouTube Music (é um vídeo ou um single sem álbum).") : <AlbumPage id={a} />;
     case "artist": return a?.startsWith("ext:") ? remote("artist", realArtistId(a), "Este artista não tem página no YouTube Music.") : <ArtistPage id={a} view={b} />;
     case "podcast": return <PodcastPage id={a} />;
-    case "yt": if (a === "mood") return <YtMood key={b} params={decodeURIComponent(b ?? "")} title={decodeURIComponent(c ?? "")} />; return <RemoteCollection key={`${a}/${b}`} kind={a} id={b} />;
+    case "yt": if (a === "mood") return <YtMood key={b} params={decodeURIComponent(b ?? "")} title={decodeURIComponent(c ?? "")} />; return <RemoteCollection key={`${a}/${b}`} kind={a} id={decodeURIComponent(b ?? "")} />;
     case "history": return <HistoryPage />;
     case "stats": return <StatsPage />;
     case "wrapped": return <WrappedPage />;

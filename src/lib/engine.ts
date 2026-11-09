@@ -10,6 +10,7 @@ export const backend = isTauri;
 // ───────── YouTube Music (Início, páginas, rádio) — formatos de src-tauri/src/providers/ytmusic.rs
 export interface RCollection { kind: "album" | "playlist" | "artist" | "mix"; id: string; title: string; subtitle: string; artwork?: string | null }
 export interface YtAccountInfo { name: string; email?: string | null; handle?: string | null; avatar?: string | null }
+export interface ScAccountInfo { id: number; name: string; handle?: string | null; avatar?: string | null }
 export interface RItem { track?: ExtInfo; collection?: RCollection }
 export interface RSection { title: string; label?: string | null; layout: "list" | "carousel" | "grid"; items: RItem[]; more?: string | null }
 export interface RTile { title: string; browseId: string; params?: string | null; color?: string | null }
@@ -48,6 +49,14 @@ export const engine = {
   ytRate: (videoId: string, like: boolean) => invoke("yt_rate", { videoId, like }),
   ytMarkPlayed: (videoId: string, playedSecs: number) => invoke("yt_mark_played", { videoId, playedSecs }),
   ytExplore: (browseId: string, params?: string | null) => invoke<RExplore>("yt_explore", { browseId, params }),
+  scLoginStart: () => invoke("sc_login_start"),
+  scLoginCancel: () => invoke("sc_login_cancel"),
+  scLoginToken: (token: string) => invoke<ScAccountInfo>("sc_login_token", { token }),
+  scAccount: () => invoke<ScAccountInfo | null>("sc_account"),
+  scLogout: () => invoke("sc_logout"),
+  scLibrary: (kind: "songs" | "playlists" | "history") => invoke<RPage>("sc_library", { kind }),
+  scPlaylist: (id: string) => invoke<RPage>("sc_playlist", { id }),
+  scRate: (trackId: string, like: boolean) => invoke("sc_rate", { trackId, like }),
   ytHome: (chip?: RChip | null, continuation?: string | null) => invoke<RHome>("yt_home", { chipBrowseId: chip?.browseId, chipParams: chip?.params, continuation }),
   ytPage: (browseId: string) => invoke<RPage>("yt_page", { browseId }),
   ytRadio: (videoId?: string | null, playlistId?: string | null) => invoke<ExtInfo[]>("yt_radio", { videoId, playlistId }),

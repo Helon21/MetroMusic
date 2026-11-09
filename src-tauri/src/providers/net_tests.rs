@@ -394,3 +394,13 @@ async fn net_lastfm_chave_invalida() {
     println!("LASTFM {:?}", r);
     assert!(r.is_err());
 }
+
+#[tokio::test]
+#[ignore]
+async fn net_sc_playlist_publica() {
+    let v = super::soundcloud::api("https://api-v2.soundcloud.com/search/playlists", &[("q", "lofi hip hop".into()), ("limit", "3".into())]).await.unwrap();
+    let id = v["collection"][0]["id"].as_u64().unwrap();
+    let p = super::sc_account::playlist(&id.to_string()).await.unwrap();
+    println!("SCPL {:?}: {} faixas, 1ª {:?}", p.title, p.tracks.len(), p.tracks.first().map(|t| t.title.clone()));
+    assert!(!p.tracks.is_empty());
+}

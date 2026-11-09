@@ -1,5 +1,6 @@
 import { isTauri } from "../lib/native";
 import { logoutLastfm } from "../lib/lastfm";
+import { logoutSc } from "../lib/soundcloud";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, Reorder } from "motion/react";
 import { AlarmClock, AudioLines, Bell, Check, ChevronRight, CircleUser, Database, Download, FlaskConical, FolderOpen, FolderPlus, Gauge, Globe, GripVertical, HardDrive, HeartPulse, Info, Languages, ListOrdered, Monitor, Moon, Music, Palette, Plug, Plus, RefreshCw, Search, Shield, Sun, SunMoon, Trash2, TriangleAlert, X, Code, Scale, ScrollText, Users } from "lucide-react";
@@ -149,7 +150,7 @@ function LoginCard({ service }: { service: string }) {
     <div className="flex items-center gap-4 p-4">
       {isBrand(service) ? <BrandTile id={service} size={44} /> : <div className={cx("size-11 rounded-full grid place-items-center", acc ? "bg-ok/15 text-ok" : "bg-s3 text-t3")}>{acc ? <Check className="size-5" /> : <CircleUser className="size-5" />}</div>}
       <div className="flex-1"><div className="font-medium">{acc ? `Conectado como ${acc}` : `Não conectado ao ${name}`}</div><div className="text-t3 text-[0.84rem]">{acc ? "A sessão fica guardada só neste computador." : "Entre pela web ou cole um token/cookie."}</div></div>
-      {acc ? <Btn variant="outline" onClick={() => { if (service === "lastfm" && isTauri) { logoutLastfm(); return; } useLib.getState().setAccount(service, null); toast(`Desconectado do ${name}`); }}>Sair</Btn> : <Btn variant="primary" onClick={() => openDialog("login", { service })}>Entrar</Btn>}
+      {acc ? <Btn variant="outline" onClick={() => { if (service === "lastfm" && isTauri) { logoutLastfm(); return; } if (service === "soundcloud" && isTauri) { logoutSc(); return; } useLib.getState().setAccount(service, null); toast(`Desconectado do ${name}`); }}>Sair</Btn> : <Btn variant="primary" onClick={() => openDialog("login", { service })}>Entrar</Btn>}
     </div>
   );
 }

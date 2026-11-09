@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod deezer;
 pub mod matcher;
+pub mod sc_account;
 pub mod soundcloud;
 pub mod youtube;
 pub mod ytmusic;

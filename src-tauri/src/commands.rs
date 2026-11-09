@@ -191,3 +191,70 @@ pub async fn lastfm_scrobble(artist: String, track: String, timestamp: u64, albu
 
 #[tauri::command]
 pub async fn lastfm_love(artist: String, track: String, love: bool) -> Res<()> { crate::lastfm::love(&artist, &track, love).await }
+
+// ───────── SoundCloud (conta)
+
+const SC_LABEL: &str = "sclogin";
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ScLoginEvent { ok: bool, cancelled: bool, error: Option<String>, account: Option<providers::sc_account::Me> }
+
+async fn finish_sc_login(raw: &str) -> Res<providers::sc_account::Me> {
+    providers::sc_account::set_token(raw)?;
+    match providers::sc_account::me().await { Ok(m) => Ok(m), Err(e) => { providers::sc_account::clear(); Err(e) } }
+}
+
+/// Abre a página de login do SoundCloud (sessão anônima) e espera o cookie `oauth_token`.
+#[tauri::command]
+pub async fn sc_login_start(app: AppHandle) -> Res<()> {
+    if let Some(w) = app.get_webview_window(SC_LABEL) { let _ = w.set_focus(); return Ok(()); }
+    let win = WebviewWindowBuilder::new(&app, SC_LABEL, WebviewUrl::External("https://soundcloud.com/signin".parse().map_err(|e| format!("{e}"))?))
+        .title("Entrar no SoundCloud").inner_size(520.0, 740.0).center().incognito(true).user_agent(LOGIN_UA)
+        .build().map_err(|e| format!("não foi possível abrir a janela de login: {e}"))?;
+    let site: tauri::Url = "https://soundcloud.com/".parse().unwrap();
+    tauri::async_runtime::spawn(async move {
+        let emit = |ev: ScLoginEvent| { let _ = app.emit("sc:login", ev); };
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+            if app.get_webview_window(SC_LABEL).is_none() { return emit(ScLoginEvent { ok: false, cancelled: true, error: None, account: None }); }
+            let Ok(cookies) = win.cookies_for_url(site.clone()) else { continue };
+            let Some(tok) = cookies.iter().find(|c| c.name() == "oauth_token").map(|c| c.value().to_string()) else { continue };
+            let result = finish_sc_login(&tok).await;
+            let _ = win.close();
+            return emit(match result {
+                Ok(m) => ScLoginEvent { ok: true, cancelled: false, error: None, account: Some(m) },
+                Err(e) => ScLoginEvent { ok: false, cancelled: false, error: Some(e), account: None },
+            });
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn sc_login_cancel(app: AppHandle) { if let Some(w) = app.get_webview_window(SC_LABEL) { let _ = w.close(); } }
+
+#[tauri::command]
+pub async fn sc_login_token(token: String) -> Res<providers::sc_account::Me> { finish_sc_login(&token).await }
+
+#[tauri::command]
+pub async fn sc_account() -> Res<Option<providers::sc_account::Me>> {
+    if !providers::sc_account::is_logged_in() { return Ok(None); }
+    match providers::sc_account::me().await {
+        Ok(m) => Ok(Some(m)),
+        Err(e) if e.contains("HTTP 401") || e.contains("HTTP 403") || e.contains("não é válida") => { providers::sc_account::clear(); Ok(None) }
+        Err(e) => Err(e),
+    }
+}
+
+#[tauri::command]
+pub fn sc_logout() { providers::sc_account::clear() }
+
+#[tauri::command]
+pub async fn sc_library(kind: String) -> Res<ytmusic::Page> { providers::sc_account::library(&kind).await }
+
+#[tauri::command]
+pub async fn sc_playlist(id: String) -> Res<ytmusic::Page> { providers::sc_account::playlist(&id).await }
+
+#[tauri::command]
+pub async fn sc_rate(track_id: String, like: bool) -> Res<()> { providers::sc_account::rate(&track_id, like).await }
