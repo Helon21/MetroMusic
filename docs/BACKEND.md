@@ -29,6 +29,7 @@ eventos audio:* (loading, buffering, loaded, playing, paused, position, ended, e
 | `preload.rs` | Pré-cache das próximas faixas | `NextTrackPreloadCoordinator` |
 | `audio.rs` | Decodificação, reamostragem, saída, busca, pausa sem estalo | (Media3/ExoPlayer no Android) |
 | `playback.rs` | Une resolver → cache → motor | |
+| `lyrics.rs` | Letras: LrcLib (LRC, 5 estratégias de busca) e BetterLyrics (TTML com tempo por palavra e vozes de apoio) | `LrcLib`, `BetterLyrics`, `TTMLParser` |
 | `commands.rs` | Comandos expostos à interface | |
 
 ### YouTube Music
@@ -75,4 +76,5 @@ MM_AUTOTEST=1 pnpm tauri dev
 - Sem login nas contas: só catálogo público.
 - Tidal, Qobuz, JioSaavn e Spotify não têm backend.
 - A raspagem do `client_id` do SoundCloud e os clientes do InnerTube podem quebrar quando os serviços mudarem; as constantes vêm do MetroFuse e precisam acompanhá-lo.
-- Contas, histórico e letras ainda são simulados.
+- Letras reais só de BetterLyrics e LrcLib; os outros provedores da lista (Apple, Musixmatch, QQ, KuGou…) não foram portados. Letras de faixas de demonstração continuam simuladas; tradução, edição e busca manual ainda são simuladas.
+- Contas e histórico ainda são simulados.

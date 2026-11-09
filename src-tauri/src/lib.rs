@@ -11,6 +11,7 @@ mod audio;
 mod cache;
 mod commands;
 mod http;
+mod lyrics;
 mod model;
 mod playback;
 mod preload;
@@ -216,7 +217,7 @@ pub fn run() {
             commands::search_online, commands::audio_play, commands::audio_pause, commands::audio_resume, commands::audio_seek,
             commands::audio_stop, commands::audio_set_volume, commands::audio_set_speed, commands::audio_precache,
             commands::cache_stats, commands::cache_clear, commands::cache_configure,
-            commands::yt_home, commands::yt_page, commands::yt_radio,
+            commands::yt_home, commands::yt_page, commands::yt_radio, commands::lyrics_get,
         ])
         .setup(|app| {
             // Motor de áudio e cache. Os eventos `audio:*` chegam a todas as janelas.

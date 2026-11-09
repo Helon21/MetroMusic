@@ -32,7 +32,7 @@ export interface Playlist {
 }
 export interface Podcast { id: string; title: string; author: string; hue: number; seed: number; description: string; episodeIds: string[] }
 export interface Mood { id: string; title: string; hue: number; group: string }
-export interface LyricLine { t: number; end: number; text: string; words: { t: number; end: number; w: string }[]; bg?: boolean }
+export interface LyricLine { t: number; end: number; text: string; words: { t: number; end: number; w: string }[]; bg?: boolean; agent?: string | null }
 export interface Lyrics { synced: boolean; provider: string; lines: LyricLine[] }
 
 export const SOURCES: { id: SourceId; name: string; hue: number; home: boolean }[] = [
@@ -204,9 +204,12 @@ const LINES = [
 ];
 const BG = ["(ainda vejo luz)", "(devagar)", "(sempre volta)", "(ô, ô, ô)"];
 
+/** Letras reais já buscadas no backend (por id de faixa). Ausente = ainda não buscada. */
+export const extLyrics = new Map<string, Lyrics | null>();
 const lyricsCache = new Map<string, Lyrics | null>();
 /** Letra sincronizada fictícia. `null` = letra não encontrada. */
 export function getLyrics(track: Track): Lyrics | null {
+  if (track.ext) return extLyrics.get(track.id) ?? null;
   if (lyricsCache.has(track.id)) return lyricsCache.get(track.id)!;
   const n = Number(track.id.replace(/\D/g, "")) || 1;
   let out: Lyrics | null = null;

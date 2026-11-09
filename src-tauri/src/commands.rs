@@ -68,3 +68,11 @@ pub async fn yt_page(browse_id: String) -> Res<ytmusic::Page> {
 pub async fn yt_radio(video_id: Option<String>, playlist_id: Option<String>) -> Res<Vec<TrackInfo>> {
     ytmusic::radio(video_id.as_deref(), playlist_id.as_deref()).await
 }
+
+// ───────── Letras
+
+#[tauri::command]
+pub async fn lyrics_get(track: TrackInfo, order: Vec<String>) -> Res<Option<crate::lyrics::Lyrics>> {
+    let supported: Vec<String> = order.into_iter().filter(|p| crate::lyrics::SUPPORTED.contains(&p.as_str())).collect();
+    crate::lyrics::get(&track, &supported).await
+}

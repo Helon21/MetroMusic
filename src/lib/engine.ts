@@ -35,6 +35,7 @@ export const engine = {
   setVolume: (volume: number) => invoke("audio_set_volume", { volume }),
   setSpeed: (speed: number) => invoke("audio_set_speed", { speed }),
   precache: (tracks: ExtInfo[], count: number) => invoke("audio_precache", { tracks, count, order: playbackOrder() }),
+  lyrics: (track: ExtInfo, order: string[]) => invoke<unknown>("lyrics_get", { track, order }),
   ytHome: (chip?: RChip | null, continuation?: string | null) => invoke<RHome>("yt_home", { chipBrowseId: chip?.browseId, chipParams: chip?.params, continuation }),
   ytPage: (browseId: string) => invoke<RPage>("yt_page", { browseId }),
   ytRadio: (videoId?: string | null, playlistId?: string | null) => invoke<ExtInfo[]>("yt_radio", { videoId, playlistId }),

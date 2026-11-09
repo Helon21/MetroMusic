@@ -168,3 +168,21 @@ async fn net_ytmusic_inicio_e_paginas() {
     if let Ok(p) = &ar { std::fs::write(format!("{dir}/artist.json"), serde_json::to_string(p).unwrap()).unwrap(); }
     std::fs::write(format!("{dir}/radio.json"), serde_json::to_string(&r).unwrap()).unwrap();
 }
+
+#[tokio::test]
+#[ignore]
+async fn net_letras() {
+    let t = TrackInfo { provider: "youtube".into(), id: "J7p4bzqLvCw".into(), title: "Blinding Lights".into(), artists: vec!["The Weeknd".into()], album: Some("After Hours".into()), duration_ms: Some(202_000), ..Default::default() };
+    for p in ["better", "lrclib"] {
+        let l = crate::lyrics::get(&t, &[p.to_string()]).await.unwrap();
+        match l {
+            Some(l) => println!("LETRA {p}: {} | sincronizada={} | {} linhas | 1ª: {:?} | palavras da 1ª: {} | bg={}", l.provider, l.synced, l.lines.len(), l.lines[0].text, l.lines[0].words.len(), l.lines.iter().filter(|x| x.bg).count()),
+            None => println!("LETRA {p}: não encontrada"),
+        }
+    }
+    let ordem = vec!["better".to_string(), "lrclib".to_string()];
+    let todos = crate::lyrics::get(&t, &ordem).await.unwrap();
+    assert!(todos.is_some(), "nenhum provedor achou a letra");
+    let raro = TrackInfo { provider: "youtube".into(), id: "x".into(), title: "zzzxqj faixa inexistente 91827".into(), artists: vec!["ninguem".into()], ..Default::default() };
+    println!("LETRA inexistente: {:?}", crate::lyrics::get(&raro, &ordem).await.unwrap().is_some());
+}

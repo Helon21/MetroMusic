@@ -6,6 +6,7 @@ import { copyText, cx } from "../lib/util";
 import { usePlayer } from "../store/player";
 import { useSetting } from "../store/settings";
 import { openDialog, toast, useUI, type MenuItem } from "../store/ui";
+import { useRealLyrics } from "../lib/lyricsStore";
 import { Btn, Empty, IconBtn, Spinner } from "./ui";
 
 interface LyrPrefs { offset: Record<string, number>; translated: Record<string, "loading" | "done">; setOffset: (id: string, v: number) => void; translate: (id: string) => void; clearTranslation: (id: string) => void }
@@ -46,7 +47,8 @@ export function LyricsMenuButton({ track, size = 32 }: { track: Track; size?: nu
 
 /** Letra sincronizada. `scale` ajusta o tamanho relativo (painel lateral vs. tela cheia). */
 export function LyricsView({ track, scale = 1, className }: { track: Track; scale?: number; className?: string }) {
-  const lyrics = useMemo(() => getLyrics(track), [track]);
+  const real = useRealLyrics(track);
+  const lyrics = useMemo(() => getLyrics(track), [track, real.version]);
   const offset = useLyr((s) => s.offset[track.id] ?? 0);
   const tr = useLyr((s) => s.translated[track.id]);
   const pos = usePlayer((s) => s.position) + offset;
@@ -72,6 +74,7 @@ export function LyricsView({ track, scale = 1, className }: { track: Track; scal
   }, [active, inGap, auto, free, lyrics]);
   useEffect(() => { setFree(false); box.current?.scrollTo({ top: 0 }); }, [track.id]);
 
+  if (!lyrics && real.loading) return <div className={cx("grid place-items-center text-t3", className)}><Spinner /></div>;
   if (!lyrics) return (
     <div className={cx("grid place-items-center", className)}>
       <Empty icon={<MicVocal />} title="Letra não encontrada" text="Nenhum provedor tem a letra desta faixa. Você pode buscar manualmente ou adicionar a sua.">
@@ -148,7 +151,8 @@ export function LyricsView({ track, scale = 1, className }: { track: Track; scal
 
 /** Linha única da letra atual (usada sob a capa e na barra do player). */
 export function LyricLineNow({ track, className }: { track: Track; className?: string }) {
-  const lyrics = useMemo(() => getLyrics(track), [track]);
+  const real = useRealLyrics(track);
+  const lyrics = useMemo(() => getLyrics(track), [track, real.version]);
   const offset = useLyr((s) => s.offset[track.id] ?? 0);
   const line = usePlayer((s) => { if (!lyrics?.synced) return ""; const p = s.position + offset; let cur = ""; for (const l of lyrics.lines) { if (l.t <= p) cur = p < l.end + 1.5 ? l.text : ""; else break; } return cur; });
   return <div key={line} className={cx("truncate animate-[fade_0.4s_ease]", className)} style={{ animation: "none" }}>{line || "♪"}</div>;
