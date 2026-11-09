@@ -7,6 +7,15 @@
 //   - evento "mm:cmd" (bandeja, mídia do sistema e mini-player -> janela principal)
 //   - evento "mm:state" / "mm:hello" (janela principal <-> mini-player)
 
+mod audio;
+mod cache;
+mod commands;
+mod http;
+mod model;
+mod playback;
+mod preload;
+mod providers;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Mutex;
