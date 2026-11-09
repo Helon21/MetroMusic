@@ -261,3 +261,33 @@ async fn net_conta_tudo() {
     println!("TUDO histórico: {} dias, {} faixas, 1º dia: {:?}", h.sections.len(), h.sections.iter().map(|s| s.items.len()).sum::<usize>(), h.sections.first().map(|s| s.title.clone()));
     for k in ["playlists", "albums", "artists"] { let p = super::ytmusic::library(k).await.unwrap(); println!("TUDO {k}: {} itens", p.items.len()); }
 }
+
+#[tokio::test]
+#[ignore]
+async fn net_conta_fim() {
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let v = super::ytmusic::debug_raw("VLLM").await;
+    let mut o = vec![]; paths(&v, "continuationCommand", String::new(), &mut o);
+    println!("FIM 1ª: {} tokens; contagem na página: {:?}", o.len(), v.pointer("/header/musicEditablePlaylistDetailHeaderRenderer/subtitle").or_else(|| v.pointer("/header/musicDetailHeaderRenderer/secondSubtitle")).map(|x| x.to_string().chars().take(200).collect::<String>()));
+    let mut o2 = vec![]; paths(&v, "secondSubtitle", String::new(), &mut o2); paths(&v, "subtitle", String::new(), &mut o2);
+    for l in o2.iter().take(3) { println!("FIM sub: {l}"); }
+}
+
+#[tokio::test]
+#[ignore]
+async fn net_conta_fim2() {
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let v = super::ytmusic::debug_raw("VLLM").await;
+    let tok = |v: &serde_json::Value| { let mut o = vec![]; fn walk(v: &serde_json::Value, o: &mut Vec<String>) { match v { serde_json::Value::Object(m) => { if let Some(t) = m.get("continuationCommand").and_then(|c| c.get("token")).and_then(|t| t.as_str()) { o.push(t.to_string()); } m.values().for_each(|x| walk(x, o)); } serde_json::Value::Array(a) => a.iter().for_each(|x| walk(x, o)), _ => {} } } walk(v, &mut o); o };
+    let mut t = tok(&v);
+    for i in 0..30 {
+        let Some(token) = t.last().cloned() else { println!("FIM2 sem token na parte {i}"); break };
+        let c = super::ytmusic::debug_raw_cont(&token).await;
+        let mut rows = vec![]; paths(&c, "musicResponsiveListItemRenderer", String::new(), &mut rows);
+        t = tok(&c);
+        let keys: Vec<String> = c.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
+        println!("FIM2 parte {i}: {} linhas, {} tokens, chaves {:?}", rows.len(), t.len(), keys);
+    }
+}
