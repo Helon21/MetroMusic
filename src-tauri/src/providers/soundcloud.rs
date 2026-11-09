@@ -139,6 +139,7 @@ fn to_track(v: &Value) -> Option<TrackInfo> {
         explicit: publisher.and_then(|p| p.get("explicit")).and_then(|x| x.as_bool()).unwrap_or(false),
         url: text(v, "permalink_url"),
         preview_url: None,
+        ..Default::default()
     })
 }
 

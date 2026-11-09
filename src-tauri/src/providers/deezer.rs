@@ -31,6 +31,7 @@ fn to_track(v: &Value) -> Option<TrackInfo> {
         explicit: v.get("explicit_lyrics").and_then(|x| x.as_bool()).unwrap_or(false),
         url: s(v, "link"),
         preview_url: s(v, "preview"),
+        ..Default::default()
     })
 }
 

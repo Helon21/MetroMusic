@@ -27,6 +27,11 @@ pub struct TrackInfo {
     /// Trecho de 30 s oferecido pela API pública do Deezer.
     #[serde(default)]
     pub preview_url: Option<String>,
+    /// Ids de navegação do YouTube Music (álbum `MPRE…`, canal do artista `UC…`), para abrir as páginas reais.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist_id: Option<String>,
 }
 
 impl TrackInfo {

@@ -8,6 +8,8 @@ export interface ExtInfo {
   provider: "youtube" | "soundcloud" | "deezer"; id: string; title: string; artists: string[];
   album?: string | null; durationMs?: number | null; isrc?: string | null; artworkUrl?: string | null;
   explicit?: boolean; url?: string | null; previewUrl?: string | null;
+  /** ids de navegação do YouTube Music (álbum MPRE…, canal UC…) */
+  albumId?: string | null; artistId?: string | null;
 }
 export interface Artist {
   id: string; name: string; hue: number; seed: number; genre: string;
@@ -271,6 +273,12 @@ function saveExt() {
   }, 400);
 }
 
+/** ids sintéticos do catálogo local (`extal:…`, `ext:…`) → ids reais do YouTube Music, para abrir a página de verdade. */
+const realAlbums = new Map<string, string>();
+const realArtists = new Map<string, string>();
+export const realAlbumId = (id: string) => realAlbums.get(id);
+export const realArtistId = (id: string) => realArtists.get(id);
+
 /** Registra (ou atualiza) uma faixa real e devolve a `Track` correspondente. */
 export function registerTrack(info: ExtInfo, persist = true): Track {
   const id = `${info.provider}:${info.id}`;
@@ -285,6 +293,8 @@ export function registerTrack(info: ExtInfo, persist = true): Track {
     if (al) { if (!al.trackIds.includes(id)) al.trackIds.push(id); }
     else AL.set(albumId, { id: albumId, title: info.album, artistId, year: new Date().getFullYear(), hue: h % 360, seed: h % 1e6, kind: "Single", trackIds: [id] });
   }
+  if (info.artistId) realArtists.set(artistId, info.artistId);
+  if (info.albumId && albumId) realAlbums.set(albumId, info.albumId);
   const prev = T.get(id);
   const t: Track = {
     id, title: info.title, artistId, albumId, duration: Math.round((info.durationMs ?? 0) / 1000), explicit: !!info.explicit, plays: 0,

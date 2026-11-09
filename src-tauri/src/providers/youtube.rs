@@ -152,13 +152,14 @@ pub(super) fn parse_item(r: &Value) -> Option<TrackInfo> {
 
     let (mut artists, mut album, mut duration) = (Vec::<String>::new(), None::<String>, None::<u64>);
     let mut loose: Vec<String> = vec![];
+    let (mut album_id, mut artist_id) = (None::<String>, None::<String>);
     for run in col(1).and_then(|r| r.as_array()).into_iter().flatten() {
         let text = run.get("text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
         if text.is_empty() || text == "•" { continue; }
         let browse = at(run, "navigationEndpoint.browseEndpoint.browseId").and_then(|b| b.as_str()).unwrap_or("");
         if let Some(d) = parse_duration(&text) { duration = Some(d); }
-        else if browse.starts_with("UC") { artists.push(text); }
-        else if browse.starts_with("MPRE") { album = Some(text); }
+        else if browse.starts_with("UC") { if artist_id.is_none() { artist_id = Some(browse.to_string()); } artists.push(text); }
+        else if browse.starts_with("MPRE") { album_id = Some(browse.to_string()); album = Some(text); }
         else if !matches!(text.as_str(), "Song" | "Video" | "Música" | "Vídeo") { loose.push(text); }
     }
     // Artistas sem link (ex.: "Vários artistas") aparecem como texto solto antes do álbum.
@@ -172,7 +173,7 @@ pub(super) fn parse_item(r: &Value) -> Option<TrackInfo> {
     });
     Some(TrackInfo {
         provider: "youtube".into(), url: Some(format!("https://music.youtube.com/watch?v={id}")), id, title, artists, album,
-        duration_ms: duration, isrc: None, artwork_url: artwork, explicit, preview_url: None,
+        duration_ms: duration, isrc: None, artwork_url: artwork, explicit, preview_url: None, album_id, artist_id,
     })
 }
 

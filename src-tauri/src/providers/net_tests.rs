@@ -291,3 +291,18 @@ async fn net_conta_fim2() {
         println!("FIM2 parte {i}: {} linhas, {} tokens, chaves {:?}", rows.len(), t.len(), keys);
     }
 }
+
+#[tokio::test]
+#[ignore]
+async fn net_conta_ids() {
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let p = super::ytmusic::library("songs").await.unwrap();
+    let com_album = p.tracks.iter().filter(|t| t.album_id.is_some()).count();
+    let com_artista = p.tracks.iter().filter(|t| t.artist_id.is_some()).count();
+    println!("IDS nome sem id: {}", p.tracks.iter().filter(|t| t.album.is_some() && t.album_id.is_none()).count());
+    println!("IDS {} faixas: {com_album} com álbum, {com_artista} com artista; 1ª: {:?} {:?}", p.tracks.len(), p.tracks[0].album_id, p.tracks[0].artist_id);
+    let alb = p.tracks.iter().find_map(|t| t.album_id.clone()).unwrap();
+    let pg = super::ytmusic::page(&alb).await.unwrap();
+    println!("IDS álbum {alb}: {:?} com {} faixas", pg.title, pg.tracks.len());
+}

@@ -111,6 +111,17 @@ fn artist_names(runs: &Value) -> Vec<String> {
         .filter_map(|r| r.get("text").and_then(|t| t.as_str()).map(str::to_string)).collect()
 }
 
+/// Primeiro canal de artista (`UC…`) e primeiro álbum (`MPRE…`) com link entre os trechos dados.
+fn link_ids<'a>(runs: impl Iterator<Item = &'a Value>) -> (Option<String>, Option<String>) {
+    let (mut artist, mut album) = (None, None);
+    for run in runs {
+        let Some(b) = at(run, "navigationEndpoint.browseEndpoint.browseId").and_then(|b| b.as_str()) else { continue };
+        if b.starts_with("UC") && artist.is_none() { artist = Some(b.to_string()); }
+        if b.starts_with("MPRE") && album.is_none() { album = Some(b.to_string()); }
+    }
+    (artist, album)
+}
+
 fn collection(kind: &str, id: &str, title: String, subtitle: String, artwork: Option<String>) -> Item {
     Item { track: None, collection: Some(CollectionRef { kind: kind.into(), id: id.into(), title, subtitle, artwork }) }
 }
@@ -135,7 +146,8 @@ fn two_row(r: &Value) -> Option<Item> {
                 .find(|t| !t.is_empty() && *t != "•" && !matches!(*t, "Song" | "Video" | "Música" | "Vídeo")) { artists.push(a.to_string()); }
         }
         if artists.is_empty() { artists.push("Artista desconhecido".into()); }
-        return Some(track_item(TrackInfo { provider: "youtube".into(), url: Some(format!("https://music.youtube.com/watch?v={vid}")), id: vid, title, artists, artwork_url: art, explicit: is_explicit(r), ..Default::default() }));
+        let (artist_id, album_id) = link_ids(sub.get("runs").and_then(|r| r.as_array()).into_iter().flatten());
+        return Some(track_item(TrackInfo { provider: "youtube".into(), url: Some(format!("https://music.youtube.com/watch?v={vid}")), id: vid, title, artists, artwork_url: art, explicit: is_explicit(r), artist_id, album_id, ..Default::default() }));
     }
     if let Some(b) = nav.get("browseEndpoint") {
         let id = b.get("browseId")?.as_str()?;
@@ -247,9 +259,10 @@ fn page_track(r: &Value, album: Option<&str>, fallback_artists: &[String], fallb
     })));
     let duration = at(r, "fixedColumns.0.musicResponsiveListItemFixedColumnRenderer.text.runs.0.text").or_else(|| at(r, "fixedColumns.0.musicResponsiveListItemFlexColumnRenderer.text.runs.0.text"))
         .and_then(|t| t.as_str()).and_then(parse_duration);
+    let (artist_id, album_id) = link_ids((1..4).filter_map(col).flat_map(|c| c.get("runs").and_then(|r| r.as_array()).into_iter().flatten()));
     Some(TrackInfo {
         provider: "youtube".into(), url: Some(format!("https://music.youtube.com/watch?v={id}")), id, title, artists, album: album_name, duration_ms: duration,
-        artwork_url: thumb(r).or_else(|| fallback_art.clone()), explicit: is_explicit(r), ..Default::default()
+        artwork_url: thumb(r).or_else(|| fallback_art.clone()), explicit: is_explicit(r), artist_id, album_id, ..Default::default()
     })
 }
 
@@ -299,6 +312,7 @@ pub async fn page(browse_id: &str) -> Res<Page> {
     }
     let sections = find_all(&v, "musicCarouselShelfRenderer").into_iter().filter_map(carousel).collect();
     let items = find_all(&v, "gridRenderer").into_iter().flat_map(|g| g.get("items").and_then(|i| i.as_array()).into_iter().flatten()).filter_map(|i| i.get("musicTwoRowItemRenderer")).filter_map(two_row).collect();
+    if kind == "album" { for t in tracks.iter_mut() { t.album_id.get_or_insert_with(|| browse_id.to_string()); } }
     Ok(Page { kind: kind.into(), id: browse_id.into(), title, subtitle, description, artwork, tracks, sections, items })
 }
 
@@ -326,8 +340,9 @@ pub async fn radio(video_id: Option<&str>, playlist_id: Option<&str>) -> Res<Vec
             let b = at(run, "navigationEndpoint.browseEndpoint.browseId").and_then(|b| b.as_str())?;
             if b.starts_with("MPRE") { run.get("text").and_then(|t| t.as_str()).map(str::to_string) } else { None }
         });
+        let (artist_id, album_id) = link_ids(byline.get("runs").and_then(|r| r.as_array()).into_iter().flatten());
         Some(TrackInfo {
-            provider: "youtube".into(), url: Some(format!("https://music.youtube.com/watch?v={id}")), id, title, artists, album,
+            provider: "youtube".into(), url: Some(format!("https://music.youtube.com/watch?v={id}")), id, title, artists, album, artist_id, album_id,
             duration_ms: r.get("lengthText").and_then(first_run).and_then(|t| parse_duration(&t)), artwork_url: thumb(r), explicit: is_explicit(r), ..Default::default()
         })
     }).collect())
