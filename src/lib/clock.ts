@@ -58,5 +58,6 @@ export function useActiveLine(lines: LyricLine[], synced: boolean, offset: numbe
     f();
     return () => cancelAnimationFrame(id);
   }, [lines, synced, offset]); // eslint-disable-line react-hooks/exhaustive-deps
-  return st;
+  // a letra pode ter mudado (outra faixa, ou chegou agora) antes de o efeito recalcular: nunca devolve índice fora dela
+  return st.active < lines.length ? st : { active: -1, inGap: false };
 }
