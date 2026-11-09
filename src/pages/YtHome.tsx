@@ -30,7 +30,9 @@ function Skeleton() {
 
 /** Início do YouTube Music com o conteúdo real (da conta, se houver sessão). */
 export default function YtHome() {
-  const account = useYt((s) => s.info?.name) ?? useLib((s) => s.accounts.youtube);
+  const ytName = useYt((s) => s.info?.name);
+  const libName = useLib((s) => s.accounts.youtube);
+  const account = ytName ?? libName;
   const epoch = useYt((s) => s.epoch);
   const [chip, setChip] = useState<RChip | null>(null);
   const [data, setData] = useState<Cached | null>(() => { const c = cache.get("home"); return c && Date.now() - c.at < TTL ? c : null; });
