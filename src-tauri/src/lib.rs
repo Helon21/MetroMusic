@@ -217,7 +217,7 @@ pub fn run() {
             commands::search_online, commands::audio_play, commands::audio_pause, commands::audio_resume, commands::audio_seek,
             commands::audio_stop, commands::audio_set_volume, commands::audio_set_speed, commands::audio_precache,
             commands::cache_stats, commands::cache_clear, commands::cache_configure,
-            commands::yt_home, commands::yt_page, commands::yt_radio, commands::lyrics_get,
+            commands::yt_home, commands::yt_page, commands::yt_radio, commands::lyrics_get, commands::yt_login_start, commands::yt_login_cancel, commands::yt_login_cookie, commands::yt_account, commands::yt_logout, commands::yt_library, commands::yt_rate, commands::yt_mark_played,
         ])
         .setup(|app| {
             // Motor de áudio e cache. Os eventos `audio:*` chegam a todas as janelas.

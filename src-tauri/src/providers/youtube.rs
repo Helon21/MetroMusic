@@ -28,7 +28,7 @@ pub struct Client {
     name: &'static str,
     version: &'static str,
     id: &'static str,
-    ua: &'static str,
+    pub(super) ua: &'static str,
     os_name: Option<&'static str>,
     os_version: Option<&'static str>,
     make: Option<&'static str>,

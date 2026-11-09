@@ -2,6 +2,8 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 import App from "./App";
 import Mini from "./pages/Mini";
+import { initAccounts, loginWeb } from "./lib/account";
+import { invoke } from "./lib/native";
 import { startBridge } from "./lib/bridge";
 import { getPlaylist, loadExternalTracks } from "./lib/catalog";
 import { initBackend, usePlayer } from "./store/player";
@@ -27,6 +29,8 @@ if (new URLSearchParams(location.search).has("mini") || location.hash === "#mini
 
   startBridge();
   initBackend();
+  initAccounts();
+  if (import.meta.env.DEV && (window as any).__TAURI_INTERNALS__) invoke<boolean>("dev_flag", { name: "MM_AUTOLOGIN" }).then((on) => on && loginWeb());
   root.render(<App />);
   // Em desenvolvimento, `MM_AUTOTEST=1 pnpm tauri dev` roda o teste do fluxo de reprodução e escreve no log.
   if (import.meta.env.DEV) import("./lib/native").then(({ invoke, isTauri }) => isTauri && invoke<boolean>("dev_flag", { name: "MM_AUTOTEST" }).then((on) => on && setTimeout(() => import("./lib/devAutotest").then((m) => m.runAutotest((x) => console.warn("[autotest] " + x))), 3000)));

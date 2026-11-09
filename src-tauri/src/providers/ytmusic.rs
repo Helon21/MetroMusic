@@ -321,3 +321,129 @@ pub async fn radio(video_id: Option<&str>, playlist_id: Option<&str>) -> Res<Vec
         })
     }).collect())
 }
+
+// ───────── Conta, biblioteca, histórico e curtidas (exigem sessão)
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountInfo {
+    pub name: String,
+    pub email: Option<String>,
+    pub handle: Option<String>,
+    pub avatar: Option<String>,
+}
+
+fn need_login() -> Res<()> { if auth::is_logged_in() { Ok(()) } else { Err("entre na sua conta do YouTube Music primeiro".into()) } }
+
+/// Nome, e-mail e foto da conta ativa (`account/account_menu`). Falha se a sessão não for válida.
+pub async fn account_info() -> Res<AccountInfo> {
+    need_login()?;
+    let visitor = visitor_data().await;
+    let v = post("account/account_menu", &WEB_REMIX, &visitor, json!({ "context": context(&WEB_REMIX, &visitor) }), true).await?;
+    let h = find_all(&v, "activeAccountHeaderRenderer").into_iter().next().ok_or("a sessão não é válida (o YouTube não reconheceu a conta); entre de novo")?;
+    let text = |k: &str| h.get(k).map(runs_text).filter(|t| !t.is_empty());
+    Ok(AccountInfo {
+        name: text("accountName").ok_or("a conta não tem nome")?,
+        email: text("email"), handle: text("channelHandle"),
+        avatar: at(h, "accountPhoto.thumbnails").and_then(|a| a.as_array()).and_then(|a| a.last()).and_then(|t| t.get("url")).and_then(|u| u.as_str()).map(str::to_string),
+    })
+}
+
+/// Artistas que o usuário segue: linhas de lista com `browseId` de canal.
+fn artist_rows(v: &Value) -> Vec<Item> {
+    let mut shelves = find_all(v, "musicShelfRenderer");
+    shelves.extend(find_all(v, "musicPlaylistShelfRenderer"));
+    shelves.iter().flat_map(|s| shelf_rows(s).0).filter_map(|r| {
+        let id = at(&r, "navigationEndpoint.browseEndpoint.browseId").and_then(|b| b.as_str())?.to_string();
+        if !id.starts_with("UC") { return None; }
+        let col = |i: usize| at(&r, &format!("flexColumns.{i}.musicResponsiveListItemFlexColumnRenderer.text"));
+        let title = first_run(col(0)?)?;
+        let subtitle = col(1).map(runs_text).unwrap_or_default();
+        Some(collection("artist", &id, title, subtitle, thumb(&r)))
+    }).collect()
+}
+
+/// Seções do histórico (uma por dia: "Hoje", "Ontem"...).
+async fn history_sections() -> Res<Vec<Section>> {
+    let v = browse(json!({ "browseId": "FEmusic_history" })).await?;
+    let mut out = vec![];
+    for shelf in find_all(&v, "musicShelfRenderer") {
+        let title = shelf.get("title").map(runs_text).unwrap_or_default();
+        let (rows, _) = shelf_rows(shelf);
+        let items: Vec<Item> = rows.iter().filter_map(|r| page_track(r, None, &[], &None)).map(track_item).collect();
+        if !items.is_empty() { out.push(Section { title, label: None, layout: "list".into(), items, more: None }); }
+    }
+    Ok(out)
+}
+
+/// Biblioteca da conta: "songs" (curtidas), "playlists", "albums", "artists" ou "history".
+pub async fn library(kind: &str) -> Res<Page> {
+    need_login()?;
+    match kind {
+        "songs" => page("FEmusic_liked_videos").await.map(|mut p| { p.kind = "songs".into(); p }),
+        "playlists" => page("FEmusic_liked_playlists").await.map(|mut p| { p.kind = "playlists".into(); p }),
+        "albums" => page("FEmusic_liked_albums").await.map(|mut p| { p.kind = "albums".into(); p }),
+        "artists" => {
+            let v = browse(json!({ "browseId": "FEmusic_library_corpus_artists" })).await?;
+            Ok(Page { kind: "artists".into(), id: "artists".into(), items: artist_rows(&v), ..Default::default() })
+        }
+        "history" => Ok(Page { kind: "history".into(), id: "history".into(), sections: history_sections().await?, ..Default::default() }),
+        _ => Err(format!("biblioteca desconhecida: {kind}")),
+    }
+}
+
+/// Curtir / descurtir uma música na conta.
+pub async fn rate(video_id: &str, like: bool) -> Res<()> {
+    need_login()?;
+    let visitor = visitor_data().await;
+    let body = json!({ "context": context(&WEB_REMIX, &visitor), "target": { "videoId": video_id } });
+    post(if like { "like/like" } else { "like/removelike" }, &WEB_REMIX, &visitor, body, true).await.map(|_| ())
+}
+
+fn nonce() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    const A: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u64(crate::model::now_ms());
+    let mut x = h.finish();
+    (0..16).map(|_| { let c = A[(x & 63) as usize] as char; x = x.rotate_right(6) ^ x.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 7; c }).collect()
+}
+
+fn fmt_time(x: f64) -> String { let s = format!("{x:.2}"); s.trim_end_matches('0').trim_end_matches('.').to_string() }
+
+/// Registra a reprodução no histórico oficial do YouTube Music ("marcar como assistido").
+/// Porte de `registerPlaybackTracking` do MetroFuse: o player autenticado (WEB_REMIX) devolve as URLs de
+/// rastreio; chamá-las com o mesmo `cpn` faz a música entrar no histórico da conta.
+pub async fn mark_played(video_id: &str, played_secs: f64) -> Res<()> {
+    need_login()?;
+    let visitor = visitor_data().await;
+    let body = json!({ "context": context(&WEB_REMIX, &visitor), "videoId": video_id, "contentCheckOk": true, "racyCheckOk": true });
+    let v = post("player", &WEB_REMIX, &visitor, body, true).await?;
+    let base = |k: &str| at(&v, &format!("playbackTracking.{k}.baseUrl")).and_then(|u| u.as_str()).map(str::to_string);
+    let playback = base("videostatsPlaybackUrl").ok_or("o YouTube não devolveu a URL de rastreio de reprodução")?;
+    let watch = base("videostatsWatchtimeUrl").ok_or("o YouTube não devolveu a URL de rastreio de tempo assistido")?;
+    let len = playback.split(['?', '&']).find_map(|p| p.strip_prefix("len=")).and_then(|l| l.parse::<f64>().ok()).unwrap_or(played_secs.max(1.5));
+    let until = fmt_time((len - 1.0).max(0.5));
+    let cpn = nonce();
+    let call = |url: String, extra: Vec<(&'static str, String)>| {
+        let cpn = cpn.clone(); let visitor = visitor.clone(); let until = until.clone();
+        async move {
+            let now = crate::model::now_ms().to_string();
+            let mut q: Vec<(&str, String)> = vec![("ver", "2".into()), ("c", "WEB_REMIX".into()), ("cpn", cpn), ("cmt", until), ("el", "detailpage".into())];
+            q.extend(extra);
+            let mut req = crate::http::CLIENT.get(&url).header("User-Agent", WEB_REMIX.ua).header("Referer", "https://music.youtube.com/").header("Origin", "https://music.youtube.com")
+                .header("X-Goog-Event-Time", &now).header("X-Goog-Request-Time", &now);
+            if let Some(vd) = visitor { req = req.header("X-Goog-Visitor-Id", vd); }
+            for (k, val) in auth::headers() { req = req.header(k, val); }
+            // parâmetros repetidos na URL base são substituídos pelos nossos
+            let mut u = reqwest::Url::parse(&url).map_err(|e| e.to_string())?;
+            let keep: Vec<(String, String)> = u.query_pairs().filter(|(k, _)| !q.iter().any(|(qk, _)| qk == k)).map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
+            u.query_pairs_mut().clear().extend_pairs(keep).extend_pairs(q.iter().map(|(k, v)| (*k, v.as_str())));
+            let resp = req.build().map(|mut r| { *r.url_mut() = u; r }).map_err(|e| e.to_string())?;
+            let r = crate::http::CLIENT.execute(resp).await.map_err(|e| e.to_string())?;
+            if r.status().is_success() { Ok(()) } else { Err(format!("rastreio HTTP {}", r.status())) }
+        }
+    };
+    call(playback, vec![]).await?;
+    call(watch, vec![("st", "0".into()), ("et", until.clone())]).await
+}

@@ -7,7 +7,8 @@ import { copyText, cx, fmtCount, fmtTime, norm } from "../lib/util";
 import { useLib } from "../store/library";
 import { usePlayer } from "../store/player";
 import { BrandTile, SourceIcon, type BrandId } from "../lib/brands";
-import { toggleMiniWindow } from "../lib/native";
+import { cancelLogin, loginCookie, loginWeb, logout, useYt } from "../lib/account";
+import { isTauri, toggleMiniWindow } from "../lib/native";
 import { getSetting, setSetting, useSetting } from "../store/settings";
 import { nav, toast, useUI } from "../store/ui";
 import { useLyr } from "./Lyrics";
@@ -267,7 +268,30 @@ const SERVICES: Record<string, { name: string; hue: number; token: string; hint:
   lastfm: { name: "Last.fm", hue: 10, token: "Senha", hint: "" },
   discord: { name: "Discord", hue: 265, token: "", hint: "" },
 };
-function Login({ props, close }: P) {
+function YtLogin({ close }: P) {
+  const { status, error, info } = useYt();
+  const [mode, setMode] = useState<"web" | "cookie">("web"); const [cookie, setCookie] = useState("");
+  useEffect(() => { if (info) close(); }, [info]); // eslint-disable-line react-hooks/exhaustive-deps
+  const busy = status !== "idle";
+  return (
+    <Modal title="Entrar no YouTube Music" width={460} onClose={() => { if (status === "waiting") cancelLogin(); close(); }}>
+      <div className="flex justify-center mb-5"><BrandTile id="youtube" size={64} className="rounded-2xl" /></div>
+      <div className="flex justify-center mb-5"><div className="inline-flex p-1 rounded-full bg-s2">{(["web", "cookie"] as const).map((m) => <button key={m} onClick={() => !busy && setMode(m)} className={cx("h-8 px-4 rounded-full text-[0.86rem] font-medium", mode === m ? "bg-accent text-accent-fg" : "text-t2")}>{m === "web" ? "Login pela web" : "Colar cookie"}</button>)}</div></div>
+      {status === "waiting" ? (
+        <div className="grid place-items-center gap-3 text-t2 py-4 text-center"><Spinner className="size-7" /><div>Termine o login na janela do Google que abriu.<br /><span className="text-t3 text-[0.86rem]">Ela fecha sozinha quando a conta for reconhecida.</span></div><Btn variant="ghost" onClick={cancelLogin}>Cancelar</Btn></div>
+      ) : status === "checking" ? <div className="grid place-items-center h-36 gap-3 text-t2"><Spinner className="size-7" />Verificando a sessão…</div>
+      : mode === "web" ? (<><p className="text-t2 text-center mb-5">Uma janela do Google vai abrir para você entrar. O MetroMusic guarda só a sessão necessária, neste computador, e não a senha.</p><Btn variant="primary" className="w-full" icon={<LogIn />} onClick={loginWeb}>Continuar no Google</Btn></>)
+      : (<><Field label="Cabeçalho Cookie" hint="Abra music.youtube.com já logado, F12 › Rede, clique numa requisição para music.youtube.com e copie o valor do cabeçalho “Cookie”. Ele precisa ter o SAPISID."><TextField multiline value={cookie} onChange={setCookie} placeholder="Cole aqui" /></Field><Btn variant="primary" className="w-full" disabled={!cookie.trim()} onClick={() => loginCookie(cookie)}>Salvar e conectar</Btn></>)}
+      {error && <p className="mt-4 text-[0.86rem] text-danger text-center">{error}</p>}
+      {mode === "web" && status === "idle" && error && <p className="mt-2 text-t3 text-[0.8rem] text-center">Se o Google recusar o login nesta janela, use “Colar cookie”.</p>}
+    </Modal>
+  );
+}
+function Login(p: P) {
+  if (p.props.service === "youtube" && isTauri) return <YtLogin {...p} />;
+  return <LoginMock {...p} />;
+}
+function LoginMock({ props, close }: P) {
   const sv = SERVICES[props.service] ?? SERVICES.youtube;
   const [mode, setMode] = useState<"web" | "token">("web"); const [user, setUser] = useState(""); const [token, setToken] = useState(""); const [busy, setBusy] = useState(false);
   const done = () => { setBusy(true); setTimeout(() => { useLib.getState().setAccount(props.service, user.trim() || "cadu"); close(); toast(`Conectado ao ${sv.name}`); }, 1100); };
@@ -283,7 +307,7 @@ function Login({ props, close }: P) {
   );
 }
 function Logout({ close }: P) {
-  const out = (clear: boolean) => { useLib.getState().setAccount("youtube", null); if (clear) useLib.setState({ savedPlaylists: [] }); close(); toast("Você saiu da conta"); };
+  const out = (clear: boolean) => { close(); if (isTauri) logout(clear); else { useLib.getState().setAccount("youtube", null); if (clear) useLib.setState({ savedPlaylists: [] }); toast("Você saiu da conta"); } };
   return <Modal title="Manter os dados da biblioteca?" width={440} onClose={close} footer={<><Btn variant="ghost" onClick={close}>Cancelar</Btn><Btn variant="danger" onClick={() => out(true)}>Limpar</Btn><Btn variant="primary" onClick={() => out(false)}>Manter</Btn></>}><p className="text-t2 leading-relaxed">Quer manter as playlists e os dados da biblioteca neste computador? As músicas baixadas sempre ficam.</p></Modal>;
 }
 

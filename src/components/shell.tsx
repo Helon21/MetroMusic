@@ -10,6 +10,7 @@ import { useSetting } from "../store/settings";
 import { nav, openDialog, toast, useRoute, useUI } from "../store/ui";
 import { SourceIcon } from "../lib/brands";
 import { isNativeMac } from "../lib/native";
+import { useYt } from "../lib/account";
 import { WindowControls } from "./WindowControls";
 import { Cover, Eq, IconBtn, Kbd } from "./ui";
 
@@ -161,6 +162,7 @@ export function TopBar() {
   const route = useRoute();
   const together = useSetting<boolean>("showTogetherInSidebar");
   const accounts = useLib((s) => s.accounts);
+  const ytInfo = useYt((s) => s.info);
   const src = SOURCES.find((s) => s.id === source)!;
   return (
     <header data-tauri-drag-region className="h-14 shrink-0 flex items-center gap-2 px-4 relative z-30">
@@ -189,7 +191,7 @@ export function TopBar() {
         { label: online ? "Simular modo offline" : "Voltar a ficar online", icon: online ? <WifiOff /> : <Wifi />, onClick: () => { setOnline(!online); toast(online ? "Você está offline. Só o conteúdo baixado está disponível." : "Conexão restabelecida"); } },
         ...(accounts.youtube ? [{ divider: true }, { label: "Sair", icon: <LogOut />, danger: true, onClick: () => openDialog("logout") }] : [{ label: "Entrar", icon: <Check />, onClick: () => openDialog("login", { service: "youtube" }) }]),
       ])} className="ml-1 size-9 rounded-full grid place-items-center font-semibold text-accent-fg bg-accent hover:brightness-110 transition-[filter]">
-        {accounts.youtube ? accounts.youtube[0].toUpperCase() : <CircleUser className="size-5" />}
+        {ytInfo?.avatar ? <img src={ytInfo.avatar} alt="" referrerPolicy="no-referrer" className="size-full rounded-full object-cover" /> : accounts.youtube ? accounts.youtube[0].toUpperCase() : <CircleUser className="size-5" />}
       </button>
       <WindowControls />
     </header>

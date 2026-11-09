@@ -6,6 +6,7 @@ import { registerSections, RemoteSections } from "../components/remote";
 import { Btn, Chip, Empty, IconBtn } from "../components/ui";
 import { useLib } from "../store/library";
 import { openDialog } from "../store/ui";
+import { useYt } from "../lib/account";
 
 const greeting = () => { const h = new Date().getHours(); return h < 5 ? "Boa madrugada" : h < 12 ? "Bom dia" : h < 18 ? "Boa tarde" : "Boa noite"; };
 
@@ -29,7 +30,8 @@ function Skeleton() {
 
 /** Início do YouTube Music com o conteúdo real (da conta, se houver sessão). */
 export default function YtHome() {
-  const account = useLib((s) => s.accounts.youtube);
+  const account = useYt((s) => s.info?.name) ?? useLib((s) => s.accounts.youtube);
+  const epoch = useYt((s) => s.epoch);
   const [chip, setChip] = useState<RChip | null>(null);
   const [data, setData] = useState<Cached | null>(() => { const c = cache.get("home"); return c && Date.now() - c.at < TTL ? c : null; });
   const [state, setState] = useState<"loading" | "ok" | "error">(data ? "ok" : "loading");
@@ -55,6 +57,9 @@ export default function YtHome() {
   }, []);
 
   useEffect(() => { if (!data) load(null); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // entrou ou saiu da conta: a Início é outra
+  const firstEpoch = useRef(epoch);
+  useEffect(() => { if (epoch === firstEpoch.current) return; cache.clear(); setChip(null); setData(null); load(null, true); }, [epoch]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMore = useCallback(async () => {
     if (!data?.cont || more) return;

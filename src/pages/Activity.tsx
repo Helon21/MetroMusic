@@ -9,6 +9,9 @@ import { usePlayer } from "../store/player";
 import { nav, openDialog, toast, useUI } from "../store/ui";
 import { Grid, MediaCard, TrackList } from "../components/media";
 import { Btn, Chip, Cover, coverBg, Empty, IconBtn, SectionTitle, Segmented } from "../components/ui";
+import { useYt } from "../lib/account";
+import { isTauri } from "../lib/native";
+import YtLibraryView, { type YtKind } from "./YtLibraryView";
 
 // ───────── Histórico
 export function HistoryPage() {
@@ -35,7 +38,8 @@ export function HistoryPage() {
         <Segmented id="hist" value={src} onChange={setSrc} options={[["local", "Local"], ["remote", "Conta"], ["spotify", "Spotify"]]} />
         <IconBtn label="Limpar histórico" onClick={() => openDialog("confirm", { title: "Limpar o histórico de escuta?", text: "Todo o histórico local será apagado. As estatísticas deixam de contar essas reproduções.", confirm: "Limpar", danger: true, action: () => { useLib.getState().clear("history"); toast("Histórico limpo"); } })}><Trash2 /></IconBtn>
       </div>
-      {src === "spotify" && !spotify ? <Empty icon={<LogIn />} title="Entre no Spotify para ver seu histórico de escuta" text="O MetroMusic pode mostrar e sincronizar o que você ouve com a sua conta do Spotify."><Btn variant="primary" onClick={() => nav("settings/spotify")}>Conectar Spotify</Btn></Empty>
+      {src === "remote" && isTauri ? (useYt.getState().info ? <YtLibraryView kind="history" filter={q} /> : <Empty icon={<LogIn />} title="Entre no YouTube Music para ver o histórico da conta" text="O que você ouve no MetroMusic também aparece no histórico oficial do YouTube Music."><Btn variant="primary" onClick={() => openDialog("login", { service: "youtube" })}>Entrar</Btn></Empty>)
+        : src === "spotify" && !spotify ? <Empty icon={<LogIn />} title="Entre no Spotify para ver seu histórico de escuta" text="O MetroMusic pode mostrar e sincronizar o que você ouve com a sua conta do Spotify."><Btn variant="primary" onClick={() => nav("settings/spotify")}>Conectar Spotify</Btn></Empty>
         : groups.length === 0 ? <Empty icon={<HistoryIcon />} title={q ? "Nenhum resultado encontrado" : "Nada no histórico"} text={q ? undefined : "As músicas que você ouvir aparecem aqui."} />
         : groups.map((g) => (
           <section key={g.label} className="mb-7 -mx-3">
@@ -165,14 +169,14 @@ export function WrappedPage() {
 const SERVICE_LIST: [string, string, number, string][] = [["youtube", "YouTube Music", 25, "Início, biblioteca e sincronização"], ["deezer", "Deezer", 300, "Reprodução em FLAC e letras"], ["tidal", "TIDAL", 220, "Hi-Res e capas animadas"], ["spotify", "Spotify", 150, "Canvas, início e histórico"], ["soundcloud", "SoundCloud", 50, "Início personalizado"], ["lastfm", "Last.fm", 10, "Scrobbling"], ["discord", "Discord", 265, "Rich Presence"]];
 export function AccountPage() {
   const accounts = useLib((s) => s.accounts), saved = useLib((s) => s.savedPlaylists), savedAlbums = useLib((s) => s.savedAlbums), followed = useLib((s) => s.followed), subs = useLib((s) => s.subscribedPodcasts);
-  const [tab, setTab] = useState("playlists");
-  const yt = accounts.youtube;
+  const [tab, setTab] = useState(isTauri ? "songs" : "playlists");
+  const yt = accounts.youtube; const info = useYt((s) => s.info); const real = isTauri;
   return (
     <div className="px-8 pt-5 pb-10">
       <div className="flex items-center gap-5 p-6 rounded-3xl bg-s1 mb-8 relative overflow-hidden">
         <div className="absolute -right-20 -top-20 size-72 rounded-full blur-3xl opacity-30 bg-accent" />
-        <div className="relative size-20 rounded-full bg-accent text-accent-fg grid place-items-center text-[2rem] font-bold">{yt ? yt[0].toUpperCase() : <CircleUser className="size-9" />}</div>
-        <div className="relative flex-1 min-w-0"><div className="text-[1.6rem] font-bold tracking-tight">{yt ?? "Convidado"}</div><div className="text-t3">{yt ? `${yt}@email.com · YouTube Music` : "Entre para sincronizar a biblioteca e receber recomendações"}</div></div>
+        <div className="relative size-20 rounded-full bg-accent text-accent-fg grid place-items-center text-[2rem] font-bold overflow-hidden">{info?.avatar ? <img src={info.avatar} alt="" referrerPolicy="no-referrer" className="size-full object-cover" /> : yt ? yt[0].toUpperCase() : <CircleUser className="size-9" />}</div>
+        <div className="relative flex-1 min-w-0"><div className="text-[1.6rem] font-bold tracking-tight">{yt ?? "Convidado"}</div><div className="text-t3">{yt ? `${info?.email ?? info?.handle ?? "Conta do Google"} · YouTube Music` : "Entre para sincronizar a biblioteca e receber recomendações"}</div></div>
         <Btn variant="ghost" icon={<Settings />} onClick={() => nav("settings/integrations")}>Integrações</Btn>
         {yt ? <Btn variant="outline" icon={<LogOut />} onClick={() => openDialog("logout")}>Sair</Btn> : <Btn variant="primary" icon={<LogIn />} onClick={() => openDialog("login", { service: "youtube" })}>Entrar</Btn>}
       </div>
@@ -186,7 +190,11 @@ export function AccountPage() {
           </button>
         ))}
       </div>
-      {yt ? (<>
+      {yt && real ? (<>
+        <SectionTitle sub="Conteúdo salvo no YouTube Music">Na sua conta</SectionTitle>
+        <div className="flex gap-2 mb-5">{[["songs", "Curtidas"], ["playlists", "Playlists"], ["albums", "Álbuns"], ["artists", "Artistas"], ["history", "Histórico"]].map(([v, l]) => <Chip key={v} active={tab === v} onClick={() => setTab(v)}>{l}</Chip>)}</div>
+        <YtLibraryView kind={(["songs", "playlists", "albums", "artists", "history"].includes(tab) ? tab : "songs") as YtKind} />
+      </>) : yt ? (<>
         <SectionTitle sub="Conteúdo salvo no YouTube Music">Na sua conta</SectionTitle>
         <div className="flex gap-2 mb-5">{[["playlists", "Playlists"], ["albums", "Álbuns"], ["artists", "Artistas"], ["podcasts", "Podcasts"]].map(([v, l]) => <Chip key={v} active={tab === v} onClick={() => setTab(v)}>{l}</Chip>)}</div>
         <Grid>
