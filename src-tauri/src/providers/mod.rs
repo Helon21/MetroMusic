@@ -1,9 +1,11 @@
 //! Provedores de música e a escolha de qual fornece o áudio de cada faixa.
 
+pub mod auth;
 pub mod deezer;
 pub mod matcher;
 pub mod soundcloud;
 pub mod youtube;
+pub mod ytmusic;
 
 #[cfg(test)]
 mod net_tests;

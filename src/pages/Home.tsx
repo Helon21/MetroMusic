@@ -9,6 +9,8 @@ import { usePlayer } from "../store/player";
 import { useSetting } from "../store/settings";
 import { nav, openDialog, toast, useUI } from "../store/ui";
 import { setSetting } from "../store/settings";
+import YtHome from "./YtHome";
+import { backend } from "../lib/engine";
 import { BrandTile, SourceIcon, sourceBrand } from "../lib/brands";
 import { MediaCard, resolveItem, Shelf, ShelfCards, TrackTile, useCardWidth, type Item } from "../components/media";
 import { Badge, Btn, Chip, Cover, coverBg, Empty, IconBtn, SectionTitle } from "../components/ui";
@@ -149,6 +151,8 @@ export default function Home() {
   const downloaded = Object.keys(lib.downloads).filter((k) => lib.downloads[k] >= 1);
   const mood = moods.find((m) => m.id === chip);
 
+  // No app, a fonte YouTube Music mostra o conteúdo real do serviço.
+  if (backend && source === "youtube") return <YtHome />;
   if (loading) return <Skeleton />;
   const loginService = NEEDS_LOGIN[source];
   const needsLogin = loginService && !lib.accounts[loginService];

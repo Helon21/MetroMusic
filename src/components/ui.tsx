@@ -22,8 +22,8 @@ const AUTO_ICONS: Record<string, ReactNode> = { heart: <Heart fill="currentColor
 export function Cover({ hue, seed, round, artist, icon, src, className, style, children }: { hue: number; seed: number; round?: boolean; artist?: boolean; icon?: string; src?: string; className?: string; style?: CSSProperties; children?: ReactNode }) {
   return (
     <div className={cx("relative shrink-0 overflow-hidden bg-s2 aspect-square", round || artist ? "rounded-full" : "rounded-[10px]", className)}
-      style={{ background: src ? undefined : icon ? `linear-gradient(140deg, oklch(0.62 0.17 ${hue}), oklch(0.32 0.12 ${(hue + 40) % 360}))` : coverBg(hue, seed), ...style }}>
-      {src && <img src={src} alt="" className="absolute inset-0 size-full object-cover" draggable={false} />}
+      style={{ background: icon ? `linear-gradient(140deg, oklch(0.62 0.17 ${hue}), oklch(0.32 0.12 ${(hue + 40) % 360}))` : coverBg(hue, seed), ...style }}>
+      {src && <img src={src} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" className="absolute inset-0 size-full object-cover" draggable={false} onError={(e) => { e.currentTarget.style.display = "none"; }} />}
       {artist && !src && (
         <svg viewBox="0 0 100 100" className="absolute inset-0 size-full" aria-hidden>
           <circle cx="50" cy="40" r="17" fill={`oklch(0.2 0.06 ${hue} / 0.55)`} /><path d="M14 104c0-24 16-38 36-38s36 14 36 38z" fill={`oklch(0.2 0.06 ${hue} / 0.55)`} />

@@ -7,6 +7,7 @@ import { ArtistPage, BrowsePage, ExplorePage, SearchPage } from "./Browse";
 import { AlbumPage, PlaylistPage, PodcastPage } from "./Collection";
 import Home from "./Home";
 import Library from "./Library";
+import RemoteCollection from "./RemoteCollection";
 import Settings from "./Settings";
 import { EqualizerPage, RecognizePage, TogetherPage } from "./Tools";
 export { Dialogs } from "../components/Dialogs";
@@ -24,6 +25,7 @@ export function renderRoute(route: string): ReactNode {
     case "album": return <AlbumPage id={a} />;
     case "artist": return <ArtistPage id={a} view={b} />;
     case "podcast": return <PodcastPage id={a} />;
+    case "yt": return <RemoteCollection key={`${a}/${b}`} kind={a} id={b} />;
     case "history": return <HistoryPage />;
     case "stats": return <StatsPage />;
     case "wrapped": return <WrappedPage />;

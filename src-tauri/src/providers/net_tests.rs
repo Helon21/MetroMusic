@@ -119,3 +119,52 @@ async fn net_decode_youtube() {
     println!("YT baixado: {n} bytes");
     println!("YT decodificação: {:?}", decode_stats(path, "m4a"));
 }
+
+#[tokio::test]
+#[ignore]
+async fn net_ytmusic_inicio_e_paginas() {
+    let mut home = ytmusic::home(None, None).await.expect("início");
+    println!("INICIO: {} chips, {} seções na 1ª página, continuação={}", home.chips.len(), home.sections.len(), home.continuation.is_some());
+    println!("INICIO chips: {:?}", home.chips.iter().map(|c| c.title.as_str()).collect::<Vec<_>>());
+    // segue as continuações (a Início carrega aos poucos)
+    let mut pages = 0;
+    while let (Some(c), true) = (home.continuation.clone(), pages < 4) {
+        let more = ytmusic::home(None, Some(c)).await.expect("continuação");
+        pages += 1;
+        println!("INICIO continuação {pages}: +{} seções", more.sections.len());
+        home.sections.extend(more.sections);
+        home.continuation = more.continuation;
+    }
+    let (mut tracks, mut albums, mut playlists, mut artists, mut mixes) = (0, 0, 0, 0, 0);
+    for s in &home.sections {
+        println!("INICIO  [{}] {} ({} itens) mais={:?}", s.layout, s.title, s.items.len(), s.more);
+        for i in &s.items {
+            match (&i.track, &i.collection) { (Some(_), _) => tracks += 1, (_, Some(c)) => match c.kind.as_str() { "album" => albums += 1, "playlist" => playlists += 1, "artist" => artists += 1, _ => mixes += 1 }, _ => {} }
+        }
+    }
+    println!("INICIO totais: {tracks} músicas, {albums} álbuns, {playlists} playlists, {artists} artistas, {mixes} mixes");
+    assert!(home.sections.len() >= 4, "a Início deveria ter várias seções");
+    let first = |kind: &str| home.sections.iter().flat_map(|s| s.items.iter()).filter_map(|i| i.collection.as_ref()).find(|c| c.kind == kind).cloned();
+    for kind in ["album", "playlist", "artist"] {
+        let Some(c) = first(kind) else { println!("PAGINA {kind}: nenhum na Início"); continue };
+        let p = ytmusic::page(&c.id).await.unwrap_or_else(|e| panic!("página {kind} {}: {e}", c.id));
+        println!("PAGINA {kind} {} -> \"{}\" | {} | {} músicas, {} seções, {} itens | arte={}", c.id, p.title, p.subtitle, p.tracks.len(), p.sections.len(), p.items.len(), p.artwork.is_some());
+        for t in p.tracks.iter().take(3) { println!("PAGINA    {} — {} [{}] {:?}ms album={:?}", t.title, t.artist_line(), t.id, t.duration_ms, t.album); }
+        if kind != "artist" { assert!(!p.tracks.is_empty(), "{kind} sem músicas"); }
+    }
+    // álbum e artista conhecidos, para não depender do que a Início mostrar hoje
+    let al = ytmusic::page("MPREb_9nqEki4ZDpp").await;
+    println!("PAGINA álbum fixo: {:?}", al.as_ref().map(|p| (p.title.clone(), p.tracks.len())).map_err(|e| e.clone()));
+    let ar = ytmusic::page("UCtxdfwb9wfkoGocVUAJ-Bmg").await;
+    println!("PAGINA artista fixo: {:?}", ar.as_ref().map(|p| (p.title.clone(), p.tracks.len(), p.sections.len())).map_err(|e| e.clone()));
+    let r = ytmusic::radio(Some("J7p4bzqLvCw"), None).await.expect("rádio");
+    println!("RADIO: {} músicas, 1ª: {} — {}", r.len(), r[0].title, r[0].artist_line());
+    assert!(r.len() > 5);
+    // grava dados reais como fixtures para conferir a interface fora do app
+    let dir = "/tmp/claude-1000/-home-caduhd4-Builds-brave-Discord2-MetroMusic/9ebec6a4-5f5d-4cf5-a251-ff0d660f0be5/scratchpad/fixtures";
+    let _ = std::fs::create_dir_all(dir);
+    std::fs::write(format!("{dir}/home.json"), serde_json::to_string(&home).unwrap()).unwrap();
+    if let Ok(p) = &al { std::fs::write(format!("{dir}/album.json"), serde_json::to_string(p).unwrap()).unwrap(); }
+    if let Ok(p) = &ar { std::fs::write(format!("{dir}/artist.json"), serde_json::to_string(p).unwrap()).unwrap(); }
+    std::fs::write(format!("{dir}/radio.json"), serde_json::to_string(&r).unwrap()).unwrap();
+}

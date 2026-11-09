@@ -216,6 +216,7 @@ pub fn run() {
             commands::search_online, commands::audio_play, commands::audio_pause, commands::audio_resume, commands::audio_seek,
             commands::audio_stop, commands::audio_set_volume, commands::audio_set_speed, commands::audio_precache,
             commands::cache_stats, commands::cache_clear, commands::cache_configure,
+            commands::yt_home, commands::yt_page, commands::yt_radio,
         ])
         .setup(|app| {
             // Motor de áudio e cache. Os eventos `audio:*` chegam a todas as janelas.
@@ -223,6 +224,8 @@ pub fn run() {
             let handle = app.handle().clone();
             let emit: audio::Emit = std::sync::Arc::new(move |name, payload| { let _ = handle.emit(name, payload); });
             app.manage(playback::Player::new(cache_dir, 4096, emit));
+            // Sessão do YouTube Music guardada de uma execução anterior.
+            providers::auth::init(app.path().app_data_dir()?.join("youtube-auth.json"));
             // Sem bandeja (ex.: ambiente sem appindicator) o app segue funcionando; só não esconde a janela.
             if let Err(e) = setup_tray(app.handle()) {
                 eprintln!("[bandeja] indisponível: {e}");

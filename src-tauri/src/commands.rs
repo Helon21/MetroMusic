@@ -2,7 +2,7 @@
 
 use crate::model::{Res, TrackInfo};
 use crate::playback::Player;
-use crate::providers;
+use crate::providers::{self, ytmusic};
 use serde::Serialize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -50,4 +50,21 @@ pub fn cache_configure(player: P, limit_mb: Option<u64>, enabled: Option<bool>) 
     if let Some(mb) = limit_mb { player.cache.set_limit_mb(mb); }
     if let Some(e) = enabled { player.cache.enabled.store(e, Ordering::Relaxed); }
     player.cache.trim(&player.protected());
+}
+
+// ───────── YouTube Music: Início, páginas e rádio
+
+#[tauri::command]
+pub async fn yt_home(chip_browse_id: Option<String>, chip_params: Option<String>, continuation: Option<String>) -> Res<ytmusic::HomeFeed> {
+    ytmusic::home(chip_browse_id.map(|b| (b, chip_params)), continuation).await
+}
+
+#[tauri::command]
+pub async fn yt_page(browse_id: String) -> Res<ytmusic::Page> {
+    ytmusic::page(&browse_id).await
+}
+
+#[tauri::command]
+pub async fn yt_radio(video_id: Option<String>, playlist_id: Option<String>) -> Res<Vec<TrackInfo>> {
+    ytmusic::radio(video_id.as_deref(), playlist_id.as_deref()).await
 }

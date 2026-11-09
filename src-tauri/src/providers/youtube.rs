@@ -37,7 +37,7 @@ pub struct Client {
     api_format: &'static str,
 }
 
-const WEB_REMIX: Client = Client {
+pub(super) const WEB_REMIX: Client = Client {
     key: "web_remix", name: "WEB_REMIX", version: "1.20260213.01.00", id: "67",
     ua: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0",
     os_name: None, os_version: None, make: None, model: None, sdk: None, api_format: "1",
@@ -77,7 +77,7 @@ static STREAMS: Lazy<SyncMutex<HashMap<String, StreamInfo>>> = Lazy::new(|| Sync
 static VISITOR_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^Cg[ts]").unwrap());
 
 /// `visitorData` identifica a sessão anônima; vem do `sw.js_data` do YouTube Music.
-async fn visitor_data() -> Option<String> {
+pub(super) async fn visitor_data() -> Option<String> {
     let mut guard = VISITOR.lock().await;
     if guard.is_some() { return guard.clone(); }
     let body = CLIENT.get(format!("{ORIGIN_MUSIC}/sw.js_data")).header("User-Agent", BROWSER_UA).send().await.ok()?.text().await.ok()?;
@@ -87,7 +87,7 @@ async fn visitor_data() -> Option<String> {
     found
 }
 
-fn context(c: &Client, visitor: &Option<String>) -> Value {
+pub(super) fn context(c: &Client, visitor: &Option<String>) -> Value {
     let mut client = json!({ "clientName": c.name, "clientVersion": c.version, "gl": "US", "hl": "en", "visitorData": visitor });
     for (k, v) in [("osName", c.os_name), ("osVersion", c.os_version), ("deviceMake", c.make), ("deviceModel", c.model), ("androidSdkVersion", c.sdk)] {
         if let Some(v) = v { client[k] = json!(v); }
@@ -95,7 +95,8 @@ fn context(c: &Client, visitor: &Option<String>) -> Value {
     json!({ "client": client, "request": { "internalExperimentFlags": [], "useSsl": true }, "user": { "lockedSafetyMode": false } })
 }
 
-async fn post(endpoint: &str, c: &Client, visitor: &Option<String>, body: Value) -> Res<Value> {
+/// `auth`: assina a requisição com a sessão da conta, se houver uma.
+pub(super) async fn post(endpoint: &str, c: &Client, visitor: &Option<String>, body: Value, auth: bool) -> Res<Value> {
     let mut req = CLIENT
         .post(format!("{API}/{endpoint}?prettyPrint=false"))
         .header("Content-Type", "application/json")
@@ -114,6 +115,7 @@ async fn post(endpoint: &str, c: &Client, visitor: &Option<String>, body: Value)
     if let Some(v) = c.os_version { req = req.header("X-Goog-OS-Version", v); }
     if let Some(v) = c.sdk { req = req.header("X-Android-Sdk-Int", v); }
     if let Some(v) = visitor { req = req.header("X-Goog-Visitor-Id", v); }
+    if auth { for (k, v) in super::auth::headers() { req = req.header(k, v); } }
     let resp = req.json(&body).send().await.map_err(err)?;
     let status = resp.status();
     if !status.is_success() { return Err(format!("InnerTube {endpoint} HTTP {status}")); }
@@ -123,25 +125,25 @@ async fn post(endpoint: &str, c: &Client, visitor: &Option<String>, body: Value)
 // ───────── Busca
 
 /// Acesso por caminho: "a.b.0.c" (números indexam arrays).
-fn at<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
+pub(super) fn at<'a>(v: &'a Value, path: &str) -> Option<&'a Value> {
     path.split('.').try_fold(v, |cur, seg| match seg.parse::<usize>() {
         Ok(i) => cur.get(i),
         Err(_) => cur.get(seg),
     })
 }
 
-fn parse_duration(s: &str) -> Option<u64> {
+pub(super) fn parse_duration(s: &str) -> Option<u64> {
     static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d+(:\d{1,2}){1,2}$").unwrap());
     if !RE.is_match(s) { return None; }
     Some(s.split(':').fold(0u64, |acc, p| acc * 60 + p.parse::<u64>().unwrap_or(0)) * 1000)
 }
 
-fn big_artwork(url: &str) -> String {
+pub(super) fn big_artwork(url: &str) -> String {
     static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"=w\d+-h\d+").unwrap());
     RE.replace(url, "=w544-h544").to_string()
 }
 
-fn parse_item(r: &Value) -> Option<TrackInfo> {
+pub(super) fn parse_item(r: &Value) -> Option<TrackInfo> {
     let id = at(r, "playlistItemData.videoId")
         .or_else(|| at(r, "overlay.musicItemThumbnailOverlayRenderer.content.musicPlayButtonRenderer.playNavigationEndpoint.watchEndpoint.videoId"))
         .and_then(|v| v.as_str())?.to_string();
@@ -178,7 +180,7 @@ pub async fn search(query: &str, limit: usize) -> Res<Vec<TrackInfo>> {
     if query.trim().is_empty() { return Ok(vec![]); }
     let visitor = visitor_data().await;
     let body = json!({ "context": context(&WEB_REMIX, &visitor), "query": query, "params": urlencoding::decode(FILTER_SONG).map(|c| c.into_owned()).unwrap_or_default() });
-    let v = post("search", &WEB_REMIX, &visitor, body).await?;
+    let v = post("search", &WEB_REMIX, &visitor, body, false).await?;
     let sections = at(&v, "contents.tabbedSearchResultsRenderer.tabs.0.tabRenderer.content.sectionListRenderer.contents").and_then(|c| c.as_array());
     let mut out = vec![];
     for sec in sections.into_iter().flatten() {
@@ -241,7 +243,7 @@ fn expiry_ms(url: &str, now: u64, api_secs: Option<u64>) -> u64 {
 
 async fn attempt(c: &'static Client, video_id: &str, expected_ms: Option<u64>, visitor: &Option<String>) -> Res<StreamInfo> {
     let body = json!({ "context": context(c, visitor), "videoId": video_id, "playlistId": null, "contentCheckOk": true, "racyCheckOk": true });
-    let player = post("player", c, visitor, body).await?;
+    let player = post("player", c, visitor, body, false).await?;
     let status = at(&player, "playabilityStatus.status").and_then(|s| s.as_str()).unwrap_or("?");
     if status != "OK" { return Err(format!("{}: playabilidade={status}", c.key)); }
     let f = pick_format(&player, expected_ms).ok_or_else(|| format!("{}: sem formato AAC com URL direta", c.key))?;

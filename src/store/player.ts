@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { getTrack, sample, songs, type SourceId, type Track } from "../lib/catalog";
+import { getTrack, registerTrack, sample, songs, type SourceId, type Track } from "../lib/catalog";
 import { useLib } from "./library";
 import { backend, engine } from "../lib/engine";
 import { onEvent } from "../lib/native";
@@ -127,6 +127,18 @@ export const usePlayer = create<Player>()(
           if (s.index < s.queue.length - 1) return started({ index: s.index + 1 });
           if (s.repeat === "all") return started({ index: 0 });
           if (getSetting("autoLoadMore") && getSetting("similarContent")) {
+            // Faixa do YouTube Music: a continuação é a rádio real dela.
+            const cur = real(s.queue[s.index]);
+            if (cur?.ext?.provider === "youtube") {
+              engine.ytRadio(cur.ext.id).then((list) => {
+                const have = new Set(get().queue);
+                const ids = (list ?? []).map((t) => registerTrack(t).id).filter((i) => !have.has(i));
+                if (!ids.length) throw new Error("rádio sem novidades");
+                set({ queue: [...get().queue, ...ids] });
+                started({ index: s.index + 1 });
+              }).catch(() => { if (auto) set({ playing: false, position: 0 }); });
+              return;
+            }
             const more = similar(s.queue[s.index]);
             if (more.length) { set({ queue: [...s.queue, ...more] }); return started({ index: s.index + 1 }); }
           }
@@ -161,6 +173,15 @@ export const usePlayer = create<Player>()(
         startRadio: (trackId) => {
           const t = getTrack(trackId); if (!t) return;
           toast("Iniciando rádio…");
+          if (t.ext) {
+            if (t.ext.provider !== "youtube" || !backend) return toast("A rádio só está disponível para músicas do YouTube Music");
+            engine.ytRadio(t.ext.id).then((list) => {
+              const ids = (list ?? []).map((x) => registerTrack(x).id).filter((i) => i !== trackId);
+              set({ queue: [trackId, ...ids], index: 0, unshuffled: null, shuffle: false, queueTitle: `Rádio de ${t.title}`, radioOf: trackId });
+              started();
+            }).catch((e) => toast(`Não foi possível iniciar a rádio: ${e}`));
+            return;
+          }
           set({ queue: [trackId], index: 0, unshuffled: null, shuffle: false, queueTitle: `Rádio de ${t.title}`, radioOf: trackId });
           set({ queue: [trackId, ...similar(trackId, 24)] });
           started();

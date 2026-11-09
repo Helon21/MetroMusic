@@ -115,7 +115,7 @@ const Row = memo(function Row({ id, i, cols, selected, numbered, showAlbum, show
       <button aria-label={liked ? "Remover curtida" : "Curtir"} onClick={(e) => { e.stopPropagation(); useLib.getState().toggleLike(id); }} className={cx("grid place-items-center transition-[opacity,transform] active:scale-75", liked ? "text-accent" : "text-t3 opacity-0 group-hover:opacity-100 hover:text-t1")}>
         <Heart className="size-4" fill={liked ? "currentColor" : "none"} />
       </button>
-      <span className="text-right text-t3 text-[0.86rem] tnum pr-0.5">{fmtTime(t.duration)}</span>
+      <span className="text-right text-t3 text-[0.86rem] tnum pr-0.5">{t.duration ? fmtTime(t.duration) : "—"}</span>
       <button aria-label="Mais opções" onClick={(e) => { e.stopPropagation(); onMenu(e, t, i); }} className="grid place-items-center text-t3 opacity-0 group-hover:opacity-100 hover:text-t1"><Ellipsis className="size-4.5" /></button>
     </div>
   );

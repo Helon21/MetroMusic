@@ -7,6 +7,14 @@ import type { ExtInfo } from "./catalog";
 
 export const backend = isTauri;
 
+// ───────── YouTube Music (Início, páginas, rádio) — formatos de src-tauri/src/providers/ytmusic.rs
+export interface RCollection { kind: "album" | "playlist" | "artist" | "mix"; id: string; title: string; subtitle: string; artwork?: string | null }
+export interface RItem { track?: ExtInfo; collection?: RCollection }
+export interface RSection { title: string; label?: string | null; layout: "list" | "carousel"; items: RItem[]; more?: string | null }
+export interface RChip { title: string; browseId: string; params?: string | null }
+export interface RHome { chips: RChip[]; sections: RSection[]; continuation?: string | null; personalized: boolean }
+export interface RPage { kind: string; id: string; title: string; subtitle: string; description?: string | null; artwork?: string | null; tracks: ExtInfo[]; sections: RSection[]; items: RItem[] }
+
 /** Provedores que tocam músicas inteiras, na ordem em que o app tenta achar a mesma faixa (para o Deezer). */
 export function playbackOrder(): string[] {
   const saved: string[] = getSetting("providerOrder") ?? [];
@@ -27,6 +35,9 @@ export const engine = {
   setVolume: (volume: number) => invoke("audio_set_volume", { volume }),
   setSpeed: (speed: number) => invoke("audio_set_speed", { speed }),
   precache: (tracks: ExtInfo[], count: number) => invoke("audio_precache", { tracks, count, order: playbackOrder() }),
+  ytHome: (chip?: RChip | null, continuation?: string | null) => invoke<RHome>("yt_home", { chipBrowseId: chip?.browseId, chipParams: chip?.params, continuation }),
+  ytPage: (browseId: string) => invoke<RPage>("yt_page", { browseId }),
+  ytRadio: (videoId?: string | null, playlistId?: string | null) => invoke<ExtInfo[]>("yt_radio", { videoId, playlistId }),
   cacheStats: () => invoke<{ bytes: number; entries: number; limit: number; enabled: boolean }>("cache_stats"),
   cacheClear: () => invoke("cache_clear"),
   cacheConfigure: (limitMb?: number, enabled?: boolean) => invoke("cache_configure", { limitMb, enabled }),
