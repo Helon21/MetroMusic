@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronLeft, ChevronRight, CircleUser, Clock, History as HistoryIcon, ListPlus, LogIn, LogOut, Pause, Play, Search, Trash2, TrendingUp, X, Check, Settings } from "lucide-react";
-import { artistOf, getAlbum, getArtist, getTrack, playlists, podcasts, sample, albums, artists } from "../lib/catalog";
+import { artistOf, getAlbum, getArtist, getTrack, playlists, podcasts, registerTrack, sample, albums, artists } from "../lib/catalog";
+import { engine } from "../lib/engine";
 import { BrandTile, type BrandId } from "../lib/brands";
 import { cx, dayLabel, fmtLong, fmtNum, norm } from "../lib/util";
 import { useLib, type HistoryEntry } from "../store/library";
 import { usePlayer } from "../store/player";
 import { nav, openDialog, toast, useUI } from "../store/ui";
 import { Grid, MediaCard, TrackList } from "../components/media";
-import { Btn, Chip, Cover, coverBg, Empty, IconBtn, SectionTitle, Segmented } from "../components/ui";
+import { Btn, Chip, Cover, coverBg, Empty, IconBtn, SectionTitle, Segmented, Spinner } from "../components/ui";
 import { useYt } from "../lib/account";
 import { isTauri } from "../lib/native";
 import YtLibraryView, { type YtKind } from "./YtLibraryView";
@@ -121,27 +122,101 @@ export function StatsPage() {
 }
 
 // ───────── Retrospectiva (stories)
+interface Stats { seconds: number; songs: [string, number][]; artists: [string, number][]; albums: [string, number][] }
+interface Recap { id: string; title: string; ids: string[] }
+
+/** Estatísticas a partir de um Recap real: a ordem da playlist é o ranking que o YouTube Music montou. */
+function statsFromRecap(ids: string[]): Stats {
+  const ca: Record<string, number> = {}, cl: Record<string, number> = {}; let seconds = 0;
+  for (const id of ids) {
+    const t = getTrack(id); if (!t) continue;
+    seconds += t.duration;
+    if (getArtist(t.artistId)) ca[t.artistId] = (ca[t.artistId] ?? 0) + t.duration;
+    if (t.albumId && getAlbum(t.albumId)) cl[t.albumId] = (cl[t.albumId] ?? 0) + t.duration;
+  }
+  const rank = (c: Record<string, number>) => Object.entries(c).sort((a, b) => b[1] - a[1]);
+  return { seconds, songs: ids.filter((i) => getTrack(i)).map((i) => [i, 1] as [string, number]), artists: rank(ca), albums: rank(cl) };
+}
+
+/** Retrospectiva: com a conta do YouTube Music conectada, parte dos Recaps reais; senão, do histórico do app. */
 export function WrappedPage() {
-  const st = useStats(365);
+  const info = useYt((s) => s.info);
+  const live = isTauri && !!info;
+  const [choice, setChoice] = useState<"choose" | "local" | Recap>(live ? "choose" : "local");
+  const [recaps, setRecaps] = useState<{ id: string; title: string; subtitle: string; artwork?: string | null }[] | null>(null);
+  const [loading, setLoading] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => { if (!live) { setChoice("local"); return; } setChoice((c) => (c === "local" ? "choose" : c)); }, [live]);
+  useEffect(() => {
+    if (!live || choice !== "choose" || recaps) return;
+    let dead = false;
+    engine.ytLibrary("playlists").then((p) => {
+      if (dead || !p) return;
+      setRecaps(p.items.filter((i) => i.collection && /recap|replay/i.test(i.collection.title)).map((i) => ({ id: i.collection!.id, title: i.collection!.title, subtitle: i.collection!.subtitle, artwork: i.collection!.artwork })));
+    }).catch((e) => !dead && setError(String(e)));
+    return () => { dead = true; };
+  }, [live, choice, recaps]);
+  const open = async (r: { id: string; title: string }) => {
+    setLoading(r.id); setError("");
+    try {
+      const page = await engine.ytPage(r.id);
+      const ids = (page?.tracks ?? []).map((t) => registerTrack(t).id);
+      if (!ids.length) throw new Error("este Recap não tem músicas disponíveis");
+      setChoice({ id: r.id, title: r.title, ids });
+    } catch (e) { setError(String(e)); } finally { setLoading(null); }
+  };
+  if (choice === "choose") {
+    return (
+      <div className="px-8 pt-5 pb-10 max-w-3xl">
+        <h1 className="text-[2.1rem] font-bold tracking-tight mb-1">Retrospectiva</h1>
+        <p className="text-t3 mb-6">Escolha de onde vem a sua retrospectiva. Os Recaps são as playlists que o YouTube Music monta para você.</p>
+        {error && <p className="text-danger text-[0.9rem] mb-4">{error}</p>}
+        {!recaps ? <div className="grid place-items-center h-40 text-t3"><Spinner className="size-7" /></div> : (
+          <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(16rem, 1fr))" }}>
+            {recaps.map((r) => (
+              <button key={r.id} onClick={() => open(r)} disabled={!!loading} className="flex items-center gap-3.5 p-3 rounded-2xl bg-s1 hover:bg-s2 text-left transition-colors disabled:opacity-60">
+                <Cover hue={r.id.length * 37 % 360} seed={r.id.length * 911} src={r.artwork ?? undefined} className="size-16 rounded-xl shrink-0" />
+                <div className="min-w-0 flex-1"><div className="font-semibold truncate">{r.title}</div><div className="text-t3 text-[0.82rem] truncate">{r.subtitle}</div></div>
+                {loading === r.id && <Spinner className="size-5" />}
+              </button>
+            ))}
+            <button onClick={() => setChoice("local")} className="flex items-center gap-3.5 p-3 rounded-2xl bg-s1 hover:bg-s2 text-left transition-colors">
+              <div className="size-16 rounded-xl bg-accent/20 text-accent grid place-items-center shrink-0"><HistoryIcon className="size-7" /></div>
+              <div className="min-w-0 flex-1"><div className="font-semibold">Meu histórico no app</div><div className="text-t3 text-[0.82rem]">Calculada com o que você ouviu aqui</div></div>
+            </button>
+          </div>
+        )}
+        {recaps && !recaps.length && <p className="text-t3 mt-4">Nenhum Recap na sua conta ainda. O YouTube Music costuma publicar o do ano em dezembro.</p>}
+      </div>
+    );
+  }
+  return choice === "local" ? <WrappedStory key="local" /> : <WrappedStory key={choice.id} recap={choice} onBack={() => setChoice("choose")} />;
+}
+
+function WrappedStory({ recap, onBack }: { recap?: Recap; onBack?: () => void }) {
+  const local = useStats(365);
+  const st: Stats = useMemo(() => (recap ? statsFromRecap(recap.ids) : local), [recap, local]);
+  const year = recap?.title.match(/20\d\d/)?.[0] ?? String(new Date().getFullYear());
+  const label = recap?.title ?? `Retrospectiva ${year}`;
   const [i, setI] = useState(0); const [paused, setPaused] = useState(false);
   const minutes = Math.round(st.seconds / 60);
   const topSong = getTrack(st.songs[0]?.[0] ?? ""), topArtist = getArtist(st.artists[0]?.[0] ?? ""), topAlbum = getAlbum(st.albums[0]?.[0] ?? "");
   const Big = ({ children }: { children: React.ReactNode }) => <motion.div initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: "spring", stiffness: 180, damping: 16, delay: 0.25 }} className="text-[5.5rem] font-black tracking-tighter leading-none tnum">{children}</motion.div>;
   const T = ({ children, d = 0.1 }: { children: React.ReactNode; d?: number }) => <motion.div initial={{ y: 20, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: d, duration: 0.5 }}>{children}</motion.div>;
   const Top5 = ({ rows }: { rows: { title: string; sub: string; hue: number; seed: number; artist?: boolean }[] }) => <div className="w-full max-w-md space-y-2.5 mt-6">{rows.map((r, k) => <motion.div key={k} initial={{ x: -30, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: 0.2 + k * 0.12 }} className="flex items-center gap-4 p-2.5 rounded-2xl bg-white/12 backdrop-blur text-left"><span className="w-7 text-center text-[1.4rem] font-black">{k + 1}</span><Cover hue={r.hue} seed={r.seed} artist={r.artist} className="size-12" /><div className="min-w-0"><div className="font-bold truncate">{r.title}</div><div className="text-white/70 text-[0.86rem] truncate">{r.sub}</div></div></motion.div>)}</div>;
-  const pages: { hue: number; body: React.ReactNode }[] = !topSong || !topArtist || !topAlbum ? [{ hue: 280, body: <T><div className="text-[1.6rem] font-bold">Ainda não há dados suficientes</div><div className="text-white/75 mt-2">Ouça mais músicas para gerar a sua retrospectiva.</div></T> }] : [
-    { hue: 300, body: <><T><div className="text-[1rem] font-bold tracking-[0.4em]">METROMUSIC</div></T><Big>2026</Big><T d={0.5}><div className="text-[1.3rem] text-white/85 max-w-sm mt-4">Chegou a hora de ver o que você ouviu ao longo do ano…</div></T></> },
+  const pages: { hue: number; body: React.ReactNode }[] = !topSong || !topArtist ? [{ hue: 280, body: <T><div className="text-[1.6rem] font-bold">Ainda não há dados suficientes</div><div className="text-white/75 mt-2">Ouça mais músicas para gerar a sua retrospectiva.</div></T> }] : [
+    { hue: 300, body: <><T><div className="text-[1rem] font-bold tracking-[0.4em]">METROMUSIC</div></T><Big>{year}</Big><T d={0.5}><div className="text-[1.3rem] text-white/85 max-w-sm mt-4">{recap ? `Chegou a hora de ver o seu ${recap.title}…` : "Chegou a hora de ver o que você ouviu ao longo do ano…"}</div></T></> },
     { hue: 250, body: <><T><div className="text-[1.5rem] font-bold">Você passou muito tempo de fone.</div></T><T d={0.8}><div className="text-white/80 text-[1.2rem] mt-3">Quer saber quanto?</div></T></> },
-    { hue: 210, body: <><T><div className="text-[1.3rem]">Você ouviu</div></T><Big>{fmtNum(minutes)}</Big><T d={0.5}><div className="text-[1.3rem]">minutos de música</div><div className="text-white/70 mt-2">São {Math.round(minutes / 60 / 24 * 10) / 10} dias inteiros de som.</div></T></> },
-    { hue: 170, body: <><T><div className="text-[1.3rem]">Você ouviu</div></T><Big>{st.songs.length}</Big><T d={0.5}><div className="text-[1.3rem]">músicas diferentes!</div></T></> },
-    { hue: topSong.hue, body: <><T><div className="text-[1.3rem]">Sua música mais tocada foi</div></T><motion.div initial={{ scale: 0.5, rotate: -8, opacity: 0 }} animate={{ scale: 1, rotate: 0, opacity: 1 }} transition={{ type: "spring", delay: 0.3 }} className="my-6"><Cover hue={topSong.hue} seed={topSong.seed} src={topSong.art} className="size-56 rounded-3xl shadow-2xl" /></motion.div><T d={0.5}><div className="text-[2rem] font-black tracking-tight">{topSong.title}</div><div className="text-white/80 text-[1.1rem]">{artistOf(topSong)} · {st.songs[0][1]} reproduções</div></T></> },
-    { hue: 30, body: <><T><div className="text-[1.5rem] font-bold">Suas músicas do ano</div></T><Top5 rows={st.songs.slice(0, 5).map(([id, n]) => { const t = getTrack(id)!; return { title: t.title, sub: `${artistOf(t)} · ${n} vezes`, hue: t.hue, seed: t.seed }; })} /></> },
-    { hue: 120, body: <><T><div className="text-[1.3rem]">Você ouviu</div></T><Big>{st.artists.length}</Big><T d={0.5}><div className="text-[1.3rem]">artistas diferentes!</div></T></> },
-    { hue: topArtist.hue, body: <><T><div className="text-[1.3rem]">Seu artista do ano é</div></T><motion.div initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: "spring", delay: 0.3 }} className="my-6"><Cover hue={topArtist.hue} seed={topArtist.seed} artist className="size-56 shadow-2xl" /></motion.div><T d={0.5}><div className="text-[2.2rem] font-black tracking-tight">{topArtist.name}</div><div className="text-white/80 text-[1.1rem]">Você ouviu por {fmtNum(Math.round(st.artists[0][1] / 60))} minutos!</div></T></> },
-    { hue: 330, body: <><T><div className="text-[1.5rem] font-bold">Seus artistas do ano</div></T><Top5 rows={st.artists.slice(0, 5).map(([id, s]) => { const a = getArtist(id)!; return { title: a.name, sub: `${fmtNum(Math.round(s / 60))} minutos`, hue: a.hue, seed: a.seed, artist: true }; })} /></> },
-    { hue: topAlbum.hue + 20, body: <><T><div className="text-[1.3rem]">Seu álbum do ano é</div></T><motion.div initial={{ scale: 0.5, rotate: 8, opacity: 0 }} animate={{ scale: 1, rotate: 0, opacity: 1 }} transition={{ type: "spring", delay: 0.3 }} className="my-6"><Cover hue={topAlbum.hue} seed={topAlbum.seed} className="size-56 rounded-3xl shadow-2xl" /></motion.div><T d={0.5}><div className="text-[2rem] font-black tracking-tight">{topAlbum.title}</div><div className="text-white/80 text-[1.1rem]">{getArtist(topAlbum.artistId)?.name} · {fmtNum(Math.round(st.albums[0][1] / 60))} minutos</div></T></> },
-    { hue: 60, body: <><T><div className="text-[1.5rem] font-bold">Seus 5 álbuns do ano</div></T><Top5 rows={st.albums.slice(0, 5).map(([id, s]) => { const a = getAlbum(id)!; return { title: a.title, sub: `${getArtist(a.artistId)?.name} · ${fmtNum(Math.round(s / 60))} minutos`, hue: a.hue, seed: a.seed }; })} /></> },
-    { hue: 280, body: <><T><div className="text-[1.8rem] font-black tracking-tight">Sua playlist pessoal está pronta!</div><div className="text-white/80 mt-2 mb-6">As 50 que marcaram o seu 2026, num lugar só.</div></T><T d={0.4}><button onClick={(e) => { e.stopPropagation(); const id = useLib.getState().createPlaylist("Retrospectiva 2026", st.songs.slice(0, 50).map(([s]) => s)); toast("Playlist salva", { label: "Abrir", fn: () => nav(`playlist/${id}`) }); }} className="h-12 px-7 rounded-full bg-white text-black font-bold inline-flex items-center gap-2 hover:scale-105 transition-transform"><ListPlus className="size-5" />Criar playlist</button></T></> },
+    { hue: 210, body: <><T><div className="text-[1.3rem]">{recap ? "O seu Recap tem" : "Você ouviu"}</div></T><Big>{fmtNum(minutes)}</Big><T d={0.5}><div className="text-[1.3rem]">minutos de música</div><div className="text-white/70 mt-2">{recap ? "Escolhidas pelo YouTube Music para você." : `São ${Math.round(minutes / 60 / 24 * 10) / 10} dias inteiros de som.`}</div></T></> },
+    { hue: 170, body: <><T><div className="text-[1.3rem]">{recap ? "São" : "Você ouviu"}</div></T><Big>{st.songs.length}</Big><T d={0.5}><div className="text-[1.3rem]">músicas diferentes!</div></T></> },
+    { hue: topSong.hue, body: <><T><div className="text-[1.3rem]">Sua música mais tocada foi</div></T><motion.div initial={{ scale: 0.5, rotate: -8, opacity: 0 }} animate={{ scale: 1, rotate: 0, opacity: 1 }} transition={{ type: "spring", delay: 0.3 }} className="my-6"><Cover hue={topSong.hue} seed={topSong.seed} src={topSong.art} className="size-56 rounded-3xl shadow-2xl" /></motion.div><T d={0.5}><div className="text-[2rem] font-black tracking-tight">{topSong.title}</div><div className="text-white/80 text-[1.1rem]">{artistOf(topSong)}{recap ? " · nº 1 do seu Recap" : ` · ${st.songs[0][1]} reproduções`}</div></T></> },
+    { hue: 30, body: <><T><div className="text-[1.5rem] font-bold">Suas músicas do ano</div></T><Top5 rows={st.songs.slice(0, 5).map(([id, n]) => { const t = getTrack(id)!; return { title: t.title, sub: recap ? artistOf(t) : `${artistOf(t)} · ${n} vezes`, hue: t.hue, seed: t.seed }; })} /></> },
+    { hue: 120, body: <><T><div className="text-[1.3rem]">{recap ? "Com" : "Você ouviu"}</div></T><Big>{st.artists.length}</Big><T d={0.5}><div className="text-[1.3rem]">artistas diferentes!</div></T></> },
+    { hue: topArtist.hue, body: <><T><div className="text-[1.3rem]">Seu artista do ano é</div></T><motion.div initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: "spring", delay: 0.3 }} className="my-6"><Cover hue={topArtist.hue} seed={topArtist.seed} artist className="size-56 shadow-2xl" /></motion.div><T d={0.5}><div className="text-[2.2rem] font-black tracking-tight">{topArtist.name}</div><div className="text-white/80 text-[1.1rem]">{recap ? "Presente em mais músicas do seu Recap" : `Você ouviu por ${fmtNum(Math.round(st.artists[0][1] / 60))} minutos!`}</div></T></> },
+    { hue: 330, body: <><T><div className="text-[1.5rem] font-bold">Seus artistas do ano</div></T><Top5 rows={st.artists.slice(0, 5).map(([id, s]) => { const a = getArtist(id)!; return { title: a.name, sub: recap ? "no seu Recap" : `${fmtNum(Math.round(s / 60))} minutos`, hue: a.hue, seed: a.seed, artist: true }; })} /></> },
+    ...(topAlbum ? [{ hue: topAlbum.hue + 20, body: <><T><div className="text-[1.3rem]">Seu álbum do ano é</div></T><motion.div initial={{ scale: 0.5, rotate: 8, opacity: 0 }} animate={{ scale: 1, rotate: 0, opacity: 1 }} transition={{ type: "spring", delay: 0.3 }} className="my-6"><Cover hue={topAlbum.hue} seed={topAlbum.seed} className="size-56 rounded-3xl shadow-2xl" /></motion.div><T d={0.5}><div className="text-[2rem] font-black tracking-tight">{topAlbum.title}</div><div className="text-white/80 text-[1.1rem]">{getArtist(topAlbum.artistId)?.name}{recap ? "" : ` · ${fmtNum(Math.round(st.albums[0][1] / 60))} minutos`}</div></T></> }] : []),
+    ...(topAlbum ? [{ hue: 60, body: <><T><div className="text-[1.5rem] font-bold">Seus 5 álbuns do ano</div></T><Top5 rows={st.albums.slice(0, 5).map(([id, s]) => { const a = getAlbum(id)!; return { title: a.title, sub: recap ? (getArtist(a.artistId)?.name ?? "") : `${getArtist(a.artistId)?.name} · ${fmtNum(Math.round(s / 60))} minutos`, hue: a.hue, seed: a.seed }; })} /></> }] : []),
+    { hue: 280, body: <><T><div className="text-[1.8rem] font-black tracking-tight">Sua playlist pessoal está pronta!</div><div className="text-white/80 mt-2 mb-6">As 50 que marcaram o seu {year}, num lugar só.</div></T><T d={0.4}><button onClick={(e) => { e.stopPropagation(); const id = useLib.getState().createPlaylist(label, st.songs.slice(0, 50).map(([s]) => s)); toast("Playlist salva", { label: "Abrir", fn: () => nav(`playlist/${id}`) }); }} className="h-12 px-7 rounded-full bg-white text-black font-bold inline-flex items-center gap-2 hover:scale-105 transition-transform"><ListPlus className="size-5" />Criar playlist</button></T></> },
     { hue: 200, body: <><T><div className="text-[2.4rem] font-black tracking-tight">Obrigado por ouvir!</div><div className="text-white/80 text-[1.1rem] mt-3">Até a próxima retrospectiva.</div></T><T d={0.5}><button onClick={(e) => { e.stopPropagation(); nav("home"); }} className="mt-7 h-12 px-7 rounded-full bg-white/20 hover:bg-white/30 font-bold">Fechar a retrospectiva</button></T></> },
   ];
   const last = pages.length - 1;
@@ -157,7 +232,7 @@ export function WrappedPage() {
           </motion.div>
         </AnimatePresence>
         <div className="absolute top-4 inset-x-4 flex gap-1 z-10">{pages.map((_, k) => <div key={k} className="flex-1 h-[3px] rounded-full bg-white/25 overflow-hidden">{k < i ? <div className="h-full bg-white" /> : k === i ? <motion.div key={`${i}-${paused}`} initial={{ width: "0%" }} animate={{ width: paused ? "40%" : "100%" }} transition={{ duration: paused ? 0 : 5.2, ease: "linear" }} className="h-full bg-white" /> : null}</div>)}</div>
-        <div className="absolute top-8 right-4 z-10 flex gap-1"><IconBtn label={paused ? "Continuar" : "Pausar"} className="!text-white hover:!bg-white/15" onClick={(e) => { e.stopPropagation(); setPaused(!paused); }}>{paused ? <Play /> : <Pause />}</IconBtn><IconBtn label="Fechar" className="!text-white hover:!bg-white/15" onClick={(e) => { e.stopPropagation(); nav("home"); }}><X /></IconBtn></div>
+        <div className="absolute top-8 right-4 z-10 flex gap-1"><IconBtn label={paused ? "Continuar" : "Pausar"} className="!text-white hover:!bg-white/15" onClick={(e) => { e.stopPropagation(); setPaused(!paused); }}>{paused ? <Play /> : <Pause />}</IconBtn><IconBtn label={onBack ? "Voltar aos Recaps" : "Fechar"} className="!text-white hover:!bg-white/15" onClick={(e) => { e.stopPropagation(); if (onBack) onBack(); else nav("home"); }}><X /></IconBtn></div>
         <div key={i} className="relative h-full flex flex-col items-center justify-center text-center px-10">{p.body}</div>
         <div className="absolute bottom-5 inset-x-0 flex justify-center gap-6 text-white/50 text-[0.76rem] pointer-events-none"><span className="inline-flex items-center gap-1"><ChevronLeft className="size-3.5" />voltar</span><span className="inline-flex items-center gap-1">avançar<ChevronRight className="size-3.5" /></span></div>
       </div>

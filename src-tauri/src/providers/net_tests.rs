@@ -334,3 +334,13 @@ async fn net_conta_recap2() {
     let p = super::ytmusic::library("playlists").await.unwrap();
     for i in &p.items { if let Some(c) = &i.collection { println!("RECAP2 {} | {} | {} | {}", c.kind, c.id, c.title, c.subtitle); } }
 }
+
+#[tokio::test]
+#[ignore]
+async fn net_conta_recap3() {
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let p = super::ytmusic::page("VLLRYRDYrUwsfcDMKUwM2iXj55L7vhMePF0bWDZ").await.unwrap();
+    let min: u64 = p.tracks.iter().filter_map(|t| t.duration_ms).sum::<u64>() / 60000;
+    println!("RECAP3 {:?}: {} faixas, {} min, com álbum {}, 1ª {:?}", p.title, p.tracks.len(), min, p.tracks.iter().filter(|t| t.album.is_some()).count(), p.tracks.first().map(|t| (&t.title, &t.artists)));
+}
