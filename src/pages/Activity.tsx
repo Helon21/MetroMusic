@@ -61,7 +61,7 @@ function useStats(days: number) {
     const hs = history.filter((h) => h.at >= lim);
     const cs: Record<string, number> = {}, ca: Record<string, number> = {}, cl: Record<string, number> = {};
     let seconds = 0;
-    for (const h of hs) { const t = getTrack(h.id); if (!t || t.episode) continue; cs[t.id] = (cs[t.id] ?? 0) + 1; ca[t.artistId] = (ca[t.artistId] ?? 0) + t.duration; cl[t.albumId] = (cl[t.albumId] ?? 0) + t.duration; seconds += t.duration; }
+    for (const h of hs) { const t = getTrack(h.id); if (!t || t.episode) continue; cs[t.id] = (cs[t.id] ?? 0) + 1; if (getArtist(t.artistId)) ca[t.artistId] = (ca[t.artistId] ?? 0) + t.duration; if (t.albumId && getAlbum(t.albumId)) cl[t.albumId] = (cl[t.albumId] ?? 0) + t.duration; /* faixas sem álbum (vídeos, uploads) não entram no ranking de álbuns */ seconds += t.duration; }
     const rank = (c: Record<string, number>) => Object.entries(c).sort((a, b) => b[1] - a[1]);
     // histograma: por hora (24 h), por dia (semana/mês) ou por mês
     const n = days === 1 ? 24 : days <= 7 ? 7 : days <= 30 ? 30 : 12;
