@@ -6,6 +6,7 @@ import { copyText, cx } from "../lib/util";
 import { usePlayer } from "../store/player";
 import { useSetting } from "../store/settings";
 import { openDialog, toast, useUI, type MenuItem } from "../store/ui";
+import { useActiveLine, useSmoothTime } from "../lib/clock";
 import { useRealLyrics } from "../lib/lyricsStore";
 import { Btn, Empty, IconBtn, Spinner } from "./ui";
 
@@ -45,13 +46,45 @@ export function LyricsMenuButton({ track, size = 32 }: { track: Track; size?: nu
   return <IconBtn label="Opções da letra" size={size} onClick={(e) => openMenuAt(e.currentTarget, lyricsMenu(track))}><Ellipsis /></IconBtn>;
 }
 
+/** Palavras da linha ativa; só este componente re-renderiza a cada quadro. */
+function ActiveWords({ l, anim, offset }: { l: LyricLine; anim: string; offset: number }) {
+  const pos = useSmoothTime(offset);
+  return (
+    <>
+      {l.words.map((w, k) => {
+        const p = Math.min(1, Math.max(0, (pos - w.t) / Math.max(0.05, w.end - w.t)));
+        const sung = pos >= w.end, on = pos >= w.t;
+        const gradient = anim === "karaoke" || anim === "apple";
+        return (
+          <span key={k} className="inline-block transition-[transform,opacity,text-shadow] duration-200 ease-out"
+            style={gradient
+              ? { backgroundImage: `linear-gradient(to right, var(--t1) ${p * 100}%, color-mix(in oklch, var(--t1) 38%, transparent) ${p * 100 + (anim === "apple" ? 12 : 0)}%)`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent", transform: anim === "apple" && on && !sung ? "translateY(-2px)" : undefined, marginRight: "0.26em" }
+              : { opacity: on ? 1 : 0.4, transform: anim === "slide" ? `translateY(${on ? 0 : 5}px)` : undefined, textShadow: anim === "glow" && on && !sung ? "0 0 18px var(--t1)" : undefined, marginRight: "0.26em" }}>
+            {w.w}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+/** Os três pontinhos do intervalo instrumental. */
+function GapDots({ start, target, offset, size, align }: { start: number; target?: number; offset: number; size: number; align: string }) {
+  const pos = useSmoothTime(offset);
+  const p = target ? Math.min(1, Math.max(0, (pos - start) / (target - start))) : 0;
+  return (
+    <div data-line="gap" className={cx("flex gap-2.5 py-3", align === "center" && "justify-center", align === "right" && "justify-end")}>
+      {[0, 1, 2].map((d) => <span key={d} className="rounded-full bg-t1 transition-all duration-500" style={{ width: size * 0.42, height: size * 0.42, opacity: p > (d + 0.3) / 3.4 ? 1 : 0.25, transform: `scale(${p > (d + 0.3) / 3.4 ? 1 : 0.8})`, animation: "dot 1.8s ease-in-out infinite", animationDelay: `${d * 0.25}s` }} />)}
+    </div>
+  );
+}
+
 /** Letra sincronizada. `scale` ajusta o tamanho relativo (painel lateral vs. tela cheia). */
 export function LyricsView({ track, scale = 1, className }: { track: Track; scale?: number; className?: string }) {
   const real = useRealLyrics(track);
   const lyrics = useMemo(() => getLyrics(track), [track, real.version]);
   const offset = useLyr((s) => s.offset[track.id] ?? 0);
   const tr = useLyr((s) => s.translated[track.id]);
-  const pos = usePlayer((s) => s.position) + offset;
   const size = useSetting<number>("lyricsSize") * scale, spacing = useSetting<number>("lyricsSpacing");
   const align = useSetting<string>("lyricsPosition"), anim = useSetting<string>("lyricsAnimation");
   const glow = useSetting<boolean>("lyricsGlow"), blur = useSetting<boolean>("lyricsBlurInactive"), auto = useSetting<boolean>("lyricsAutoScroll");
@@ -61,9 +94,7 @@ export function LyricsView({ track, scale = 1, className }: { track: Track; scal
   const freeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const lines = lyrics?.lines ?? [];
-  let active = -1;
-  for (let i = 0; i < lines.length; i++) { if (lines[i].t <= pos) active = i; else break; }
-  const inGap = active >= 0 ? pos > lines[active].end + 0.6 && (lines[active + 1]?.t ?? Infinity) - lines[active].end > 5 : (lines[0]?.t ?? 0) > 5;
+  const { active, inGap } = useActiveLine(lines, !!lyrics?.synced, offset);
   const gapTarget = active >= 0 ? lines[active + 1]?.t : lines[0]?.t;
   const gapStart = active >= 0 ? lines[active].end : 0;
 
@@ -85,14 +116,7 @@ export function LyricsView({ track, scale = 1, className }: { track: Track; scal
   );
 
   const alignCls = (l: LyricLine) => (align === "center" ? "text-center origin-center" : align === "right" ? "text-right origin-right" : align === "sided" && l.bg ? "text-right origin-right" : "text-left origin-left");
-  const Gap = () => {
-    const p = gapTarget ? Math.min(1, Math.max(0, (pos - gapStart) / (gapTarget - gapStart))) : 0;
-    return (
-      <div data-line="gap" className={cx("flex gap-2.5 py-3", align === "center" && "justify-center", align === "right" && "justify-end")}>
-        {[0, 1, 2].map((d) => <span key={d} className="rounded-full bg-t1 transition-all duration-500" style={{ width: size * 0.42, height: size * 0.42, opacity: p > (d + 0.3) / 3.4 ? 1 : 0.25, transform: `scale(${p > (d + 0.3) / 3.4 ? 1 : 0.8})`, animation: "dot 1.8s ease-in-out infinite", animationDelay: `${d * 0.25}s` }} />)}
-      </div>
-    );
-  };
+  const gap = <GapDots start={gapStart} target={gapTarget} offset={offset} size={size} align={align} />;
 
   return (
     <div ref={box} className={cx("overflow-y-auto no-scrollbar mask-fade-y relative", className)}
@@ -100,9 +124,9 @@ export function LyricsView({ track, scale = 1, className }: { track: Track; scal
       <div className="py-[32%] px-1" style={{ fontSize: size, lineHeight: 1.18 }}>
         {!lyrics.synced && <div className="text-t3 text-[0.8rem] font-medium uppercase tracking-wider mb-6" style={{ fontSize: 12 }}>Letra não sincronizada</div>}
         {tr === "loading" && <div className="flex items-center gap-2 text-t2 mb-6" style={{ fontSize: 14 }}><Spinner className="size-4" /> Traduzindo letra…</div>}
-        {inGap && active < 0 && gaps && lyrics.synced && <Gap />}
+        {inGap && active < 0 && gaps && lyrics.synced && gap}
         {lines.map((l, i) => {
-          const isActive = lyrics.synced && i === active && !(inGap && pos > l.end + 0.6);
+          const isActive = lyrics.synced && i === active && !inGap;
           const dist = lyrics.synced ? Math.abs(i - Math.max(active, 0)) : 0;
           const past = lyrics.synced && i < active;
           return (
@@ -117,24 +141,10 @@ export function LyricsView({ track, scale = 1, className }: { track: Track; scal
                   filter: blur && lyrics.synced && !isActive && !free ? `blur(${Math.min(3.5, dist * 0.7)}px)` : undefined,
                   textShadow: isActive && glow ? "0 0 28px color-mix(in oklch, var(--t1) 40%, transparent)" : undefined,
                 }}>
-                {isActive && anim !== "none"
-                  ? l.words.map((w, k) => {
-                      const p = Math.min(1, Math.max(0, (pos - w.t) / (w.end - w.t)));
-                      const sung = pos >= w.end, on = pos >= w.t;
-                      const gradient = anim === "karaoke" || anim === "apple";
-                      return (
-                        <span key={k} className="inline-block transition-[transform,opacity,text-shadow] duration-200 ease-out"
-                          style={gradient
-                            ? { backgroundImage: `linear-gradient(to right, var(--t1) ${p * 100}%, color-mix(in oklch, var(--t1) 38%, transparent) ${p * 100 + (anim === "apple" ? 12 : 0)}%)`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent", transform: anim === "apple" && on && !sung ? "translateY(-2px)" : undefined, marginRight: "0.26em" }
-                            : { opacity: on ? 1 : 0.4, transform: anim === "slide" ? `translateY(${on ? 0 : 5}px)` : undefined, textShadow: anim === "glow" && on && !sung ? "0 0 18px var(--t1)" : undefined, marginRight: "0.26em" }}>
-                          {w.w}
-                        </span>
-                      );
-                    })
-                  : l.text}
+                {isActive && anim !== "none" ? <ActiveWords l={l} anim={anim} offset={offset} /> : l.text}
                 {tr === "done" && <div className="font-medium opacity-70 mt-1" style={{ fontSize: "0.5em", lineHeight: 1.3 }}>{translateLine(l.text)}</div>}
               </div>
-              {inGap && i === active && gaps && lyrics.synced && <Gap />}
+              {inGap && i === active && gaps && lyrics.synced && gap}
             </div>
           );
         })}
@@ -154,6 +164,9 @@ export function LyricLineNow({ track, className }: { track: Track; className?: s
   const real = useRealLyrics(track);
   const lyrics = useMemo(() => getLyrics(track), [track, real.version]);
   const offset = useLyr((s) => s.offset[track.id] ?? 0);
-  const line = usePlayer((s) => { if (!lyrics?.synced) return ""; const p = s.position + offset; let cur = ""; for (const l of lyrics.lines) { if (l.t <= p) cur = p < l.end + 1.5 ? l.text : ""; else break; } return cur; });
+  const { active } = useActiveLine(lyrics?.lines ?? [], !!lyrics?.synced, offset);
+  const l = lyrics?.synced && active >= 0 ? lyrics.lines[active] : null;
+  const pos = useSmoothTime(offset, !!l);
+  const line = l && pos < l.end + 1.5 ? l.text : "";
   return <div key={line} className={cx("truncate animate-[fade_0.4s_ease]", className)} style={{ animation: "none" }}>{line || "♪"}</div>;
 }

@@ -1,0 +1,62 @@
+// Relógio suave da reprodução. O motor informa a posição 4 vezes por segundo (e a simulação, 10);
+// para a letra acompanhar a fala sem "pulinhos", interpolamos entre os avisos com o relógio do navegador.
+import { useEffect, useRef, useState } from "react";
+import { usePlayer } from "../store/player";
+import type { LyricLine } from "./catalog";
+
+let a = { pos: 0, at: performance.now(), running: false, speed: 1 };
+const estimate = () => (a.running ? a.pos + ((performance.now() - a.at) / 1000) * a.speed : a.pos);
+
+function anchor() {
+  const s = usePlayer.getState();
+  return { pos: s.position, at: performance.now(), running: s.playing && !s.buffering, speed: s.speed };
+}
+a = anchor();
+usePlayer.subscribe((s, prev) => {
+  if (s.position === prev.position && s.playing === prev.playing && s.buffering === prev.buffering && s.speed === prev.speed) return;
+  const now = anchor();
+  const e = estimate();
+  // aviso quase igual à estimativa: só corrige aos poucos, para o tempo nunca andar para trás
+  if (a.running && now.running && Math.abs(now.pos - e) < 0.4) a = { ...now, pos: e + (now.pos - e) * 0.3 };
+  else a = now;
+});
+
+/** Posição atual da reprodução, em segundos, interpolada. */
+export const playerNow = () => estimate();
+
+/** Tempo que se atualiza a cada quadro. Use só em componentes pequenos. */
+export function useSmoothTime(offset = 0, enabled = true) {
+  const [t, setT] = useState(() => playerNow() + offset);
+  useEffect(() => {
+    if (!enabled) return;
+    let id = 0;
+    const f = () => { setT(playerNow() + offset); id = requestAnimationFrame(f); };
+    id = requestAnimationFrame(f);
+    return () => cancelAnimationFrame(id);
+  }, [offset, enabled]);
+  return t;
+}
+
+/** Linha ativa e se estamos num intervalo instrumental; só renderiza quando algum dos dois muda. */
+export function useActiveLine(lines: LyricLine[], synced: boolean, offset: number) {
+  const compute = (p: number) => {
+    let active = -1;
+    for (let i = 0; i < lines.length; i++) { if (lines[i].t <= p) active = i; else break; }
+    const inGap = active >= 0 ? p > lines[active].end + 0.6 && (lines[active + 1]?.t ?? Infinity) - lines[active].end > 5 : (lines[0]?.t ?? 0) > 5;
+    return { active, inGap };
+  };
+  const [st, setSt] = useState(() => compute(playerNow() + offset));
+  const last = useRef(st);
+  useEffect(() => {
+    if (!synced) return;
+    let id = 0;
+    const f = () => {
+      const n = compute(playerNow() + offset);
+      if (n.active !== last.current.active || n.inGap !== last.current.inGap) { last.current = n; setSt(n); }
+      id = requestAnimationFrame(f);
+    };
+    f();
+    return () => cancelAnimationFrame(id);
+  }, [lines, synced, offset]); // eslint-disable-line react-hooks/exhaustive-deps
+  return st;
+}
