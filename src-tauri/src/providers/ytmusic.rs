@@ -499,3 +499,6 @@ pub async fn mark_played(video_id: &str, played_secs: f64) -> Res<()> {
 pub async fn debug_raw(id: &str) -> Value { browse(json!({ "browseId": id })).await.unwrap() }
 #[cfg(test)]
 pub async fn debug_raw_cont(token: &str) -> Value { browse_more(token).await.unwrap() }
+
+#[cfg(test)]
+pub async fn debug_try(id: &str) -> Res<Value> { browse(json!({ "browseId": id })).await }

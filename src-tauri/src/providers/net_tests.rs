@@ -306,3 +306,31 @@ async fn net_conta_ids() {
     let pg = super::ytmusic::page(&alb).await.unwrap();
     println!("IDS álbum {alb}: {:?} com {} faixas", pg.title, pg.tracks.len());
 }
+
+#[tokio::test]
+#[ignore]
+async fn net_conta_recap() {
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    fn grep(v: &serde_json::Value, here: String, out: &mut Vec<String>) {
+        match v {
+            serde_json::Value::String(s) => { let l = s.to_lowercase(); if l.contains("recap") || l.contains("replay") || l.contains("wrapped") { out.push(format!("{here} = {}", s.chars().take(100).collect::<String>())); } }
+            serde_json::Value::Object(m) => for (k, x) in m { grep(x, format!("{here}.{k}"), out); },
+            serde_json::Value::Array(a) => for (i, x) in a.iter().enumerate() { grep(x, format!("{here}[{i}]"), out); },
+            _ => {}
+        }
+    }
+    for id in ["FEmusic_home", "FEmusic_explore", "FEmusic_recap", "FEmusic_replay", "FEmusic_library_landing"] {
+        let r = super::ytmusic::debug_try(id).await;
+        match r { Ok(v) => { let mut o = vec![]; grep(&v, String::new(), &mut o); println!("RECAP {id}: ok, {} menções", o.len()); for l in o.iter().take(6) { println!("RECAP   {l}"); } } Err(e) => println!("RECAP {id}: erro {e}") }
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn net_conta_recap2() {
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let p = super::ytmusic::library("playlists").await.unwrap();
+    for i in &p.items { if let Some(c) = &i.collection { println!("RECAP2 {} | {} | {} | {}", c.kind, c.id, c.title, c.subtitle); } }
+}
