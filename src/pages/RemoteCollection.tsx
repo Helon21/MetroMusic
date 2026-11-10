@@ -47,7 +47,8 @@ export default function RemoteCollection({ kind, id }: { kind: string; id: strin
   const artist = kind === "artist";
   const first = data.ids[0];
   const provider: AccountProvider = id.startsWith("sp:") ? "spotify" : "youtube";
-  const canManage = loggedIn(provider) && (kind === "album" || kind === "playlist" || kind === "artist");
+  // no Spotify só dá para salvar álbum e seguir artista (playlist de outra pessoa não é possível por aqui)
+  const canManage = loggedIn(provider) && (kind === "album" || kind === "artist" || (kind === "playlist" && provider === "youtube"));
   const libraryMenu = (e: React.MouseEvent<HTMLElement>) => {
     const k = kind as "album" | "playlist" | "artist";
     const own = !!data.editable;

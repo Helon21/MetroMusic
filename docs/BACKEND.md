@@ -78,7 +78,13 @@ Comandos genéricos (`provider` = `youtube` ou `spotify`): `playlists_editable`,
 
 O id da faixa dentro da playlist (`setId` no `TrackInfo`) vem de `playlistItemData.playlistSetVideoId` (YouTube) e do `uid` do item (Spotify). Sem ele, a remoção o procura na própria playlist.
 
-**Validado com contas reais (Spotify):** adicionar e remover faixa numa playlist sua (0 → 1 → 0), salvar/remover álbum (8 → 9 → 8) e seguir/deixar de seguir artista (2 → 3 → 2), curtir/descurtir. **Validado só por leitura (YouTube Music):** lista de playlists editáveis e onde ficam o `setVideoId` e o id de áudio do álbum. **Ainda sem teste real:** todas as escritas do YouTube Music, mover faixa no Spotify e salvar playlist de outra pessoa no Spotify (o teste que fiz não mudou a contagem).
+**Validado com contas reais** (cada operação feita e conferida lendo de volta, depois desfeita):
+- *YouTube Music:* criar playlist (com a 1ª música), adicionar, mover (a ordem mudou), renomear, remover (sem informar o `setVideoId`: ele é procurado), aparecer em "editáveis", excluir, salvar e remover álbum, salvar e remover playlist de terceiros, seguir e deixar de seguir artista.
+- *Spotify:* adicionar e remover faixa numa playlist sua, mover faixa, salvar e remover álbum, seguir e deixar de seguir artista, curtir e descurtir.
+
+**Atraso de leitura:** o YouTube Music leva ~4 s para refletir salvar/seguir nas listas da biblioteca (a leitura logo depois mostra o estado antigo); por isso a interface recarrega a lista alguns segundos depois.
+
+**Não existe no Spotify:** criar, renomear e excluir playlists, e salvar a playlist de outra pessoa (o `addToLibrary` só aceita álbum e artista; o resto usa o protocolo "rootlist" do player, que o MetroFuse também não usa). Histórico por faixa também não.
 
 ## Cache e pré-cache
 
@@ -137,7 +143,7 @@ Build: o `src-tauri/target` passa de 10 GB; limpe com `cargo clean` ao terminar 
 - Last.fm e SoundCloud: o login e a sincronização dependem de uma conta real e ainda não foram validados de ponta a ponta. O Spotify foi validado, menos o histórico por faixa, que não tem fonte.
 - Sem downloads offline nem biblioteca local (Baixadas, Arquivos locais, Enviadas).
 - Tidal, Qobuz e JioSaavn não têm backend; Deezer não tem login.
-- Criar, renomear e excluir playlists só existem no YouTube Music; no Spotify ficam de fora. As escritas do YouTube Music ainda não foram testadas com a conta real.
+- Criar, renomear e excluir playlists só existem no YouTube Music; no Spotify ficam de fora, assim como salvar a playlist de outra pessoa.
 - Letras reais só de BetterLyrics e LrcLib; tradução, edição e busca manual de letra são simuladas.
 - Podcasts, Ouvir junto, Reconhecer música, Discord Rich Presence e Cast continuam simulados. O assistente AutoEQ gera valores de exemplo e os perfis do equalizador não são salvos.
 - O Recap em vídeo 9:16 do YouTube não tem API conhecida; a Retrospectiva monta os slides com os dados dos Recaps reais.

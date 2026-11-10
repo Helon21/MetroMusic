@@ -469,3 +469,156 @@ async fn net_yt_playlists_editaveis() {
     let v = super::ytmusic::editable_playlists(None).await;
     match v { Ok(l) => println!("YTEDIT {} playlists editáveis: {:?}", l.len(), l.iter().take(6).map(|c| (&c.title, &c.id)).collect::<Vec<_>>()), Err(e) => println!("YTEDIT erro: {e}") }
 }
+
+/// Escritas reais no YouTube Music, sempre desfeitas: cria uma playlist de teste, mexe nela e a apaga.
+///   MM_AUTH_DIR=<pasta do app> cargo test net_yt_escritas -- --ignored --nocapture
+#[tokio::test]
+#[ignore]
+async fn net_yt_escritas() {
+    use super::ytmusic as yt;
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let liked = yt::library("songs").await.unwrap();
+    let vids: Vec<String> = liked.tracks.iter().map(|t| t.id.clone()).take(3).collect();
+    assert!(vids.len() == 3, "preciso de 3 músicas curtidas para testar");
+    let mut log: Vec<String> = vec![];
+    macro_rules! ok { ($nome:expr, $r:expr) => { match $r { Ok(v) => { log.push(format!("OK   {}", $nome)); Some(v) } Err(e) => { log.push(format!("ERRO {}: {e}", $nome)); None } } } }
+
+    // 1) criar já com a primeira música
+    let pid = ok!("criar playlist", yt::create_playlist("MetroMusic teste (apagar)", &vids[..1]).await);
+    if let Some(pid) = pid {
+        let tracks = |pid: String| async move { yt::page(&format!("VL{pid}")).await.map(|p| p.tracks) };
+        let n = tracks(pid.clone()).await.map(|t| t.len()).unwrap_or(0);
+        log.push(format!("     faixas após criar: {n} (esperado 1)"));
+        // 2) adicionar duas
+        ok!("adicionar 2 músicas", yt::add_to_playlist(&pid, &vids[1..3]).await);
+        let t = tracks(pid.clone()).await.unwrap_or_default();
+        log.push(format!("     faixas após adicionar: {} (esperado 3); setId presente: {}", t.len(), t.iter().all(|x| x.set_id.is_some())));
+        // 3) mover a última para antes da primeira
+        if t.len() == 3 {
+            ok!("mover a 3ª antes da 1ª", yt::move_in_playlist(&pid, t[2].set_id.as_deref().unwrap(), t[0].set_id.as_deref()).await);
+            let t2 = tracks(pid.clone()).await.unwrap_or_default();
+            log.push(format!("     ordem depois de mover: {:?} (esperado a antiga 3ª na frente: {})", t2.iter().map(|x| x.id.clone()).collect::<Vec<_>>(), t2.first().map(|x| x.id == t[2].id).unwrap_or(false)));
+        }
+        // 4) renomear
+        ok!("renomear", yt::rename_playlist(&pid, "MetroMusic teste renomeada").await);
+        let lib = yt::library("playlists").await.unwrap();
+        let achou = lib.items.iter().filter_map(|i| i.collection.as_ref()).any(|c| c.title == "MetroMusic teste renomeada");
+        log.push(format!("     nome novo aparece na biblioteca: {achou}"));
+        // 5) remover uma (sem informar o setId: ele é procurado)
+        ok!("remover 1 música", yt::remove_from_playlist(&pid, &[(vids[1].clone(), None)]).await);
+        let n2 = tracks(pid.clone()).await.map(|t| t.len()).unwrap_or(0);
+        log.push(format!("     faixas após remover: {n2} (esperado 2)"));
+        // 6) aparece nas editáveis
+        let ed = yt::editable_playlists(None).await.unwrap_or_default();
+        log.push(format!("     aparece em 'editáveis': {}", ed.iter().any(|c| c.id.contains(&pid))));
+        // 7) apagar
+        ok!("excluir playlist", yt::delete_playlist(&pid).await);
+        let lib = yt::library("playlists").await.unwrap();
+        log.push(format!("     sumiu da biblioteca: {}", !lib.items.iter().filter_map(|i| i.collection.as_ref()).any(|c| c.id.contains(&pid))));
+    }
+
+    // 8) salvar / remover da biblioteca: playlist pública, álbum e artista (todos fora da sua biblioteca)
+    let before = yt::library("playlists").await.unwrap().items.len();
+    let pub_pl = "PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"; // playlist pública qualquer
+    ok!("salvar playlist de terceiros", yt::library_save("playlist", pub_pl, true).await);
+    let mid = yt::library("playlists").await.unwrap().items.len();
+    ok!("remover playlist de terceiros", yt::library_save("playlist", pub_pl, false).await);
+    let after = yt::library("playlists").await.unwrap().items.len();
+    log.push(format!("     playlists na biblioteca: {before} → {mid} → {after} (esperado +1 e volta)"));
+
+    let alb = liked.tracks.iter().filter_map(|t| t.album_id.clone()).find(|a| !a.is_empty()).unwrap();
+    let albs_antes = yt::page("FEmusic_liked_albums").await.map(|p| p.items.len()).unwrap_or(0);
+    ok!("salvar álbum", yt::library_save("album", &alb, true).await);
+    let albs_meio = yt::page("FEmusic_liked_albums").await.map(|p| p.items.len()).unwrap_or(0);
+    ok!("remover álbum", yt::library_save("album", &alb, false).await);
+    let albs_dep = yt::page("FEmusic_liked_albums").await.map(|p| p.items.len()).unwrap_or(0);
+    log.push(format!("     álbuns salvos: {albs_antes} → {albs_meio} → {albs_dep}"));
+
+    let art = liked.tracks.iter().filter_map(|t| t.artist_id.clone()).next().unwrap();
+    ok!("seguir artista", yt::library_save("artist", &art, true).await);
+    ok!("deixar de seguir", yt::library_save("artist", &art, false).await);
+
+    println!("\nYTW ===== RESULTADO =====");
+    for l in &log { println!("YTW {l}"); }
+}
+
+/// Salvar playlist de terceiros e seguir artista no YouTube Music, com itens reais do Explorar e conferência por leitura.
+#[tokio::test]
+#[ignore]
+async fn net_yt_salvar_e_seguir() {
+    use super::ytmusic as yt;
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let ids = |p: &yt::Page| p.items.iter().filter_map(|i| i.collection.as_ref()).map(|c| c.id.clone()).collect::<Vec<_>>();
+    // playlist de terceiros: a primeira playlist de uma página de clima
+    let ex = yt::explore("FEmusic_moods_and_genres_category", Some("ggMPOg1uX1JOQWZFeDByc2Jm")).await.unwrap();
+    let pl = ex.sections.iter().flat_map(|s| s.items.iter()).filter_map(|i| i.collection.as_ref()).find(|c| c.kind == "playlist").map(|c| (c.id.clone(), c.title.clone())).unwrap();
+    let before = ids(&yt::library("playlists").await.unwrap());
+    println!("YTS playlist de teste: {:?} ({}); já na biblioteca: {}", pl.1, pl.0, before.contains(&pl.0));
+    let r1 = yt::library_save("playlist", &pl.0, true).await;
+    let mid = ids(&yt::library("playlists").await.unwrap());
+    let r2 = yt::library_save("playlist", &pl.0, false).await;
+    let after = ids(&yt::library("playlists").await.unwrap());
+    println!("YTS salvar playlist: {:?} | na biblioteca depois de salvar: {} | depois de remover: {} | total {} → {} → {}", r1.is_ok(), mid.contains(&pl.0), after.contains(&pl.0), before.len(), mid.len(), after.len());
+    // artista: o primeiro de "Top artists" das paradas
+    let ch = yt::explore("FEmusic_charts", None).await.unwrap();
+    let art = ch.sections.iter().flat_map(|s| s.items.iter()).filter_map(|i| i.collection.as_ref()).find(|c| c.kind == "artist").map(|c| (c.id.clone(), c.title.clone())).unwrap();
+    let a0 = ids(&yt::library("artists").await.unwrap());
+    let f1 = yt::library_save("artist", &art.0, true).await;
+    let a1 = ids(&yt::library("artists").await.unwrap());
+    let f2 = yt::library_save("artist", &art.0, false).await;
+    let a2 = ids(&yt::library("artists").await.unwrap());
+    println!("YTS artista {:?}: seguir {:?}, deixar {:?} | seguido depois de seguir: {} | depois de deixar: {} | total {} → {} → {}", art.1, f1.is_ok(), f2.is_ok(), a1.contains(&art.0), a2.contains(&art.0), a0.len(), a1.len(), a2.len());
+}
+
+#[tokio::test]
+#[ignore]
+async fn net_yt_estado_final() {
+    use super::ytmusic as yt;
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let ids = |p: &yt::Page| p.items.iter().filter_map(|i| i.collection.as_ref()).map(|c| c.id.clone()).collect::<Vec<_>>();
+    let ch = yt::explore("FEmusic_charts", None).await.unwrap();
+    let art = ch.sections.iter().flat_map(|s| s.items.iter()).filter_map(|i| i.collection.as_ref()).find(|c| c.kind == "artist").map(|c| (c.id.clone(), c.title.clone())).unwrap();
+    let pl = "VLRDCLAK5uy_nBE4bLuBHUXWZrF59ZrkPEToKt8M_I3Vc".to_string();
+    for espera in [0u64, 8, 8] {
+        tokio::time::sleep(std::time::Duration::from_secs(espera)).await;
+        let a = ids(&yt::library("artists").await.unwrap());
+        let p = ids(&yt::library("playlists").await.unwrap());
+        println!("YTF após +{espera}s: artista {:?} seguido={} (total {}) | playlist de teste na biblioteca={} (total {})", art.1, a.contains(&art.0), a.len(), p.contains(&pl), p.len());
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn net_yt_salvar_e_seguir_com_espera() {
+    use super::ytmusic as yt;
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let ids = |p: &yt::Page| p.items.iter().filter_map(|i| i.collection.as_ref()).map(|c| c.id.clone()).collect::<Vec<_>>();
+    // espera até 20 s a leitura refletir o estado `quer`
+    async fn ate(kind: &str, id: &str, quer: bool) -> (bool, u64) {
+        for s in 0..10u64 {
+            let p = super::ytmusic::library(kind).await.unwrap();
+            let tem = p.items.iter().filter_map(|i| i.collection.as_ref()).any(|c| c.id == id);
+            if tem == quer { return (true, s * 2); }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+        (false, 20)
+    }
+    let ch = yt::explore("FEmusic_charts", None).await.unwrap();
+    let art = ch.sections.iter().flat_map(|s| s.items.iter()).filter_map(|i| i.collection.as_ref()).find(|c| c.kind == "artist").map(|c| (c.id.clone(), c.title.clone())).unwrap();
+    let pl = "VLRDCLAK5uy_nBE4bLuBHUXWZrF59ZrkPEToKt8M_I3Vc".to_string();
+    let _ = ids;
+    yt::library_save("artist", &art.0, true).await.unwrap();
+    let (a_seg, ta) = ate("artists", &art.0, true).await;
+    yt::library_save("artist", &art.0, false).await.unwrap();
+    let (a_dei, tb) = ate("artists", &art.0, false).await;
+    println!("YTG artista {:?}: apareceu como seguido={a_seg} (em ~{ta}s); sumiu depois de deixar={a_dei} (em ~{tb}s)", art.1);
+    yt::library_save("playlist", &pl, true).await.unwrap();
+    let (p_sal, tc) = ate("playlists", &pl, true).await;
+    yt::library_save("playlist", &pl, false).await.unwrap();
+    let (p_rem, td) = ate("playlists", &pl, false).await;
+    println!("YTG playlist de terceiros: apareceu na biblioteca={p_sal} (em ~{tc}s); sumiu depois de remover={p_rem} (em ~{td}s)");
+}

@@ -36,6 +36,14 @@ export default function YtLibraryView({ kind, filter = "", provider = "youtube" 
     return () => { dead = true; };
   }, [key, kind, provider, nonce]);
 
+  // Depois de salvar/remover/editar na conta, recarrega a lista: o serviço leva uns segundos para refletir, então espera um pouco.
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const h = () => { clearTimeout(t); t = setTimeout(() => { for (const k of [...cache.keys()]) if (k.startsWith(`${provider}:`)) cache.delete(k); setNonce((n) => n + 1); }, 5000); };
+    window.addEventListener("mm:remote-changed", h);
+    return () => { clearTimeout(t); window.removeEventListener("mm:remote-changed", h); };
+  }, [provider]);
+
   if (error) return <Empty icon={<WifiOff />} title="Não foi possível carregar" text={error}><Btn variant="primary" onClick={() => { cache.delete(key); setNonce((n) => n + 1); }}>Tentar de novo</Btn></Empty>;
   if (!page) return <div className="grid place-items-center h-48 text-t3"><Spinner className="size-7" /></div>;
   const q = filter.trim().toLowerCase();

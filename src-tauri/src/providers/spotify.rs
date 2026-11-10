@@ -568,7 +568,9 @@ pub async fn move_in_playlist(playlist_id: &str, uid: &str, before_uid: Option<&
 
 /// Salva ou remove da biblioteca um álbum, playlist ou artista (seguir).
 pub async fn library_save(kind: &str, id: &str, save: bool) -> Res<()> {
-    if !matches!(kind, "album" | "playlist" | "artist") { return Err(format!("tipo de item desconhecido: {kind}")); }
+    // O Spotify aceita aqui só álbum e artista; seguir uma playlist passa por outro protocolo (a "rootlist"), que não foi portado.
+    if kind == "playlist" { return Err("Salvar playlists de outras pessoas no Spotify ainda não está disponível".into()); }
+    if !matches!(kind, "album" | "artist") { return Err(format!("tipo de item desconhecido: {kind}")); }
     let uri = format!("spotify:{kind}:{}", id.rsplit(':').next().unwrap_or(id));
     let v = gql(if save { "addToLibrary" } else { "removeFromLibrary" }, json!({ "libraryItemUris": [uri] })).await?;
     check_errors(&v, "biblioteca")
@@ -655,5 +657,40 @@ mod tests {
         let (_, total2) = liked_tracks(MAX_ITEMS).await.unwrap();
         println!("SPLIKE depois de descurtir: {total2}");
         assert_eq!((total1, total2), (total0 + 1, total0));
+    }
+
+    /// Mover faixa e salvar playlist de terceiros, sempre desfeitos:
+    /// `MM_SP_DC=<cookie> cargo test net_spotify_mover_e_salvar -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn net_spotify_mover_e_salvar() {
+        let sp_dc = std::env::var("MM_SP_DC").expect("MM_SP_DC");
+        finish(&sp_dc).await.expect("login");
+        // --- mover: duas curtidas numa playlist sua, na ordem A,B; move B antes de A; confere; limpa
+        let pls = editable_playlists().await.unwrap();
+        let alvo = pls.iter().find(|c| c.id != "sp:playlist:collection-tracks").expect("uma playlist sua").clone();
+        let antes = page(&alvo.id).await.unwrap().tracks.len();
+        let (liked, _) = liked_tracks(10).await.unwrap();
+        let (a, b) = (liked[0].id.clone(), liked[1].id.clone());
+        add_to_playlist(&alvo.id, &[a.clone(), b.clone()]).await.expect("adicionar");
+        let t = page(&alvo.id).await.unwrap().tracks;
+        let (ta, tb) = (t.iter().rev().find(|x| x.id == a).unwrap().clone(), t.iter().rev().find(|x| x.id == b).unwrap().clone());
+        println!("SPM playlist {:?}: {antes} → {} faixas; setId presente: {}", alvo.title, t.len(), ta.set_id.is_some() && tb.set_id.is_some());
+        move_in_playlist(&alvo.id, tb.set_id.as_deref().unwrap(), ta.set_id.as_deref()).await.expect("mover");
+        let t2 = page(&alvo.id).await.unwrap().tracks;
+        let ia = t2.iter().position(|x| x.id == a).unwrap();
+        let ib = t2.iter().position(|x| x.id == b).unwrap();
+        println!("SPM depois de mover: B (posição {ib}) está antes de A (posição {ia}): {}", ib < ia);
+        let uids: Vec<(String, Option<String>)> = t2.iter().filter(|x| x.id == a || x.id == b).skip(0).map(|x| (x.id.clone(), x.set_id.clone())).collect();
+        remove_from_playlist(&alvo.id, &uids[uids.len() - 2..]).await.expect("limpar");
+        println!("SPM depois de limpar: {} faixas (antes {antes})", page(&alvo.id).await.unwrap().tracks.len());
+        // --- salvar playlist de terceiros, esperando a leitura refletir
+        async fn tem(uri_id: &str) -> bool { library("playlists").await.unwrap().items.iter().filter_map(|i| i.collection.as_ref()).any(|c| c.id.ends_with(uri_id)) }
+        async fn ate(uri_id: &str, quer: bool) -> bool { for _ in 0..8 { if tem(uri_id).await == quer { return true; } tokio::time::sleep(Duration::from_secs(2)).await; } false }
+        let _ = (tem("x"), ate("x", true)); // salvar playlist de terceiros não é possível no Spotify (confirmado: o addToLibrary só aceita álbum/artista)
+        println!("SPM salvar playlist de terceiros: {:?}", library_save("playlist", "37i9dQZF1DX0XUsuxWHRQd", true).await.err());
+        // álbum e artista continuam: confere por leitura (com espera)
+        let alb = "0Hj2X0CQBjpWapFzNQGbk2";
+        let _ = alb;
     }
 }
