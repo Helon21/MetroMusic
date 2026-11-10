@@ -1,0 +1,44 @@
+# Compila só o AppImage do Linux e o guarda como arquivo de teste (NÃO publica release nem mexe no atualizador).
+# Serve para conferir mudanças no empacotamento antes de lançar uma versão.
+name: AppImage de teste (Linux)
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Sistema onde compilar (o WebKit embutido vem dele)"
+        default: ubuntu-24.04
+        type: choice
+        options: [ubuntu-22.04, ubuntu-24.04]
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ inputs.runner }}
+      - name: Dependências do Linux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libasound2-dev libssl-dev libxdo-dev
+          echo "WebKitGTK: $(dpkg -s libwebkit2gtk-4.1-dev | grep ^Version)"
+      - run: pnpm install --frozen-lockfile
+      - name: Compila o AppImage
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build --bundles appimage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MetroMusic-AppImage-${{ inputs.runner }}
+          path: src-tauri/target/release/bundle/appimage/*.AppImage
+          retention-days: 3
