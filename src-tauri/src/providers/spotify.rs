@@ -124,12 +124,17 @@ async fn submit_user_code(sp_dc: &str, user_code: &str, verification_uri_complet
         .send().await.map_err(err)?;
     let html = resp.text().await.map_err(err)?;
 
-    // Extrai flow_ctx da URL (formato: https://accounts.spotify.com/pair?code=XXXX&flow_ctx=YYYY:ZZZZ)
-    let flow_ctx = verification_uri_complete
-        .split("flow_ctx=")
+    // Extrai flow_ctx do HTML (não está na URL inicial, está em script tags no HTML)
+    let flow_ctx = html
+        .split("flow_ctx")
         .nth(1)
-        .and_then(|s| s.split('&').next())
-        .ok_or("flow_ctx não encontrado na URL de pairing")?;
+        .and_then(|s| s.split('"').nth(1))
+        .or_else(|| html.split("flowCtx").nth(1).and_then(|s| s.split('"').nth(1)))
+        .or_else(|| {
+            // Procura em JSON dentro de script tags
+            html.split("flow_ctx\":").nth(1).and_then(|s| s.split(',').next()).and_then(|s| s.trim().trim_matches('"').into())
+        })
+        .ok_or("flow_ctx não encontrado no HTML de pairing")?;
     
     // Extrai csrf_token do HTML
     let csrf_token = html
