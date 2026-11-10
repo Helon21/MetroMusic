@@ -179,7 +179,8 @@ pub async fn finish(sp_dc: &str) -> Res<Me> {
     if sp_dc.len() < 20 { return Err("o cookie sp_dc parece inválido (copie o valor do cookie sp_dc de open.spotify.com)".into()); }
     *STATE.write() = State { sp_dc, access_token: None, expires_at_ms: 0 };
     match renew().await {
-        Ok(()) => match me().await { Ok(m) => { save(); Ok(m) } Err(e) => { logout(); Err(e) } },
+        // o token saiu: a sessão é boa, só o /me falhou (ex.: limite de requisições) → não apaga a sessão
+        Ok(()) => match me().await { Ok(m) => { save(); Ok(m) } Err(e) => { if !e.starts_with(RATE_LIMITED) { logout(); } Err(friendly(&e)) } },
         Err(e) => { logout(); Err(e) }
     }
 }
@@ -198,8 +199,10 @@ async fn request(method: reqwest::Method, path: &str, query: &[(&str, String)]) 
         let text = resp.text().await.map_err(err)?;
         if status.as_u16() == 401 && attempt == 0 { renew().await?; continue; }
         if status.as_u16() == 429 {
-            tokio::time::sleep(Duration::from_secs(retry_after.unwrap_or(2).min(8))).await;
-            continue;
+            // Pausa curta: espera uma vez. Pausa longa: não fica girando, avisa quanto falta.
+            let wait = retry_after.unwrap_or(2);
+            if wait <= 5 && attempt < 2 { tokio::time::sleep(Duration::from_secs(wait)).await; continue; }
+            return Err(format!("{RATE_LIMITED} {wait}"));
         }
         // curtir/descurtir respondem 200/204 com corpo vazio: não é erro
         let v: Value = if text.trim().is_empty() { Value::Null } else { serde_json::from_str(&text).unwrap_or(Value::Null) };
@@ -208,7 +211,18 @@ async fn request(method: reqwest::Method, path: &str, query: &[(&str, String)]) 
         }
         return Ok(v);
     }
-    Err("Spotify: muitas tentativas".into())
+    Err("Spotify: não respondeu depois de várias tentativas".into())
+}
+
+/// Marca o erro de limite de requisições (o número de segundos vem depois).
+const RATE_LIMITED: &str = "Spotify: limite de requisições atingido, tente de novo em";
+
+/// Mensagem para o usuário: o erro de limite vira "tente de novo em N s".
+pub fn friendly(e: &str) -> String {
+    match e.strip_prefix(RATE_LIMITED) {
+        Some(rest) => format!("Spotify: limite de requisições atingido; tente de novo em {}s", rest.trim()),
+        None => e.to_string(),
+    }
 }
 async fn get(path: &str, query: &[(&str, String)]) -> Res<Value> { request(reqwest::Method::GET, path, query).await }
 
