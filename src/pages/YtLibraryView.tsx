@@ -3,6 +3,7 @@ import { Music, Play, WifiOff } from "lucide-react";
 import { registerTrack } from "../lib/catalog";
 import { useYt } from "../lib/account";
 import { useSc } from "../lib/soundcloud";
+import { useSp } from "../lib/spotify";
 import { engine, type RPage } from "../lib/engine";
 import { Grid, TrackList } from "../components/media";
 import { RemoteCard } from "../components/remote";
@@ -14,9 +15,9 @@ const cache = new Map<string, RPage>();
 const idOf = (t: { provider: string; id: string }) => `${t.provider}:${t.id}`;
 
 /** Biblioteca ou histórico REAIS da conta do YouTube Music. */
-export default function YtLibraryView({ kind, filter = "", provider = "youtube" }: { kind: YtKind; filter?: string; provider?: "youtube" | "soundcloud" }) {
-  const ytEpoch = useYt((s) => s.epoch), scEpoch = useSc((s) => s.epoch);
-  const epoch = provider === "soundcloud" ? scEpoch : ytEpoch;
+export default function YtLibraryView({ kind, filter = "", provider = "youtube" }: { kind: YtKind; filter?: string; provider?: "youtube" | "soundcloud" | "spotify" }) {
+  const ytEpoch = useYt((s) => s.epoch), scEpoch = useSc((s) => s.epoch), spEpoch = useSp((s) => s.epoch);
+  const epoch = provider === "soundcloud" ? scEpoch : provider === "spotify" ? spEpoch : ytEpoch;
   const key = `${provider}:${epoch}:${kind}`;
   const [page, setPage] = useState<RPage | null>(cache.get(key) ?? null);
   const [error, setError] = useState("");
@@ -26,7 +27,7 @@ export default function YtLibraryView({ kind, filter = "", provider = "youtube" 
     const hit = nonce === 0 ? cache.get(key) : undefined;
     if (hit) { setPage(hit); return; }
     setPage(null); setError("");
-    (provider === "soundcloud" ? engine.scLibrary(kind as "songs" | "playlists" | "history") : engine.ytLibrary(kind)).then((p) => {
+    (provider === "soundcloud" ? engine.scLibrary(kind as "songs" | "playlists" | "history") : provider === "spotify" ? engine.spLibrary(kind) : engine.ytLibrary(kind)).then((p) => {
       if (!p || dead) return;
       p.tracks.forEach((t) => registerTrack(t));
       p.sections.forEach((s) => s.items.forEach((i) => i.track && registerTrack(i.track)));

@@ -10,6 +10,7 @@ import { BrandTile, SourceIcon, type BrandId } from "../lib/brands";
 import { cancelLogin, loginCookie, loginWeb, logout, useYt } from "../lib/account";
 import { loginLastfm, useLastfm } from "../lib/lastfm";
 import { cancelScLogin, loginScToken, loginScWeb, useSc } from "../lib/soundcloud";
+import { cancelSpLogin, loginSp, useSp } from "../lib/spotify";
 import { isTauri, toggleMiniWindow } from "../lib/native";
 import { getSetting, setSetting, useSetting } from "../store/settings";
 import { nav, toast, useUI } from "../store/ui";
@@ -289,6 +290,29 @@ function YtLogin({ close }: P) {
     </Modal>
   );
 }
+function SpLogin({ close }: P) {
+  const { status, error, info, hasClientId, redirect } = useSp();
+  const [cid, setCid] = useState("");
+  useEffect(() => { if (info) close(); }, [info]); // eslint-disable-line react-hooks/exhaustive-deps
+  const waiting = status === "waiting";
+  return (
+    <Modal title="Entrar no Spotify" width={480} onClose={() => { if (waiting) cancelSpLogin(); close(); }}>
+      <div className="flex justify-center mb-5"><BrandTile id="spotify" size={64} className="rounded-2xl" /></div>
+      {waiting ? (
+        <div className="grid place-items-center gap-3 text-t2 py-4 text-center"><Spinner className="size-7" /><div>Termine o login na janela do Spotify que abriu.<br /><span className="text-t3 text-[0.86rem]">Ela fecha sozinha depois que você autorizar.</span></div><Btn variant="ghost" onClick={cancelSpLogin}>Cancelar</Btn></div>
+      ) : (<>
+        {!hasClientId && <>
+          <p className="text-t2 text-[0.88rem] mb-3">O Spotify exige um app para cada pessoa. Em <b>developer.spotify.com/dashboard</b> crie um app (grátis), marque <b>Web API</b> e cadastre este endereço em <b>Redirect URIs</b>:</p>
+          <div className="mb-3 p-2.5 rounded-lg bg-s2 font-mono text-[0.82rem] break-all select-all">{redirect}</div>
+          <Field label="Client ID" hint="Copie da página do seu app. Não há segredo para guardar: o login usa PKCE."><TextField autoFocus value={cid} onChange={setCid} placeholder="ex.: 3f9a…" /></Field></>}
+        {hasClientId && <p className="text-t2 text-center mb-5">Uma janela do Spotify vai abrir para você autorizar o MetroMusic. A senha não passa por aqui.</p>}
+        {error && <p className="mb-3 text-[0.86rem] text-danger">{error}</p>}
+        <Btn variant="primary" className="w-full" icon={<LogIn />} disabled={!hasClientId && !cid.trim()} onClick={() => loginSp(cid)}>Continuar no Spotify</Btn>
+        <p className="text-t3 text-[0.8rem] mt-3 text-center">As músicas tocam pelo YouTube Music ou SoundCloud: o áudio do Spotify é protegido.</p>
+      </>)}
+    </Modal>
+  );
+}
 function ScLogin({ close }: P) {
   const { status, error, info } = useSc();
   const [mode, setMode] = useState<"web" | "token">("web"); const [token, setToken] = useState("");
@@ -331,6 +355,7 @@ function Login(p: P) {
   if (p.props.service === "youtube" && isTauri) return <YtLogin {...p} />;
   if (p.props.service === "lastfm" && isTauri) return <LastfmLogin {...p} />;
   if (p.props.service === "soundcloud" && isTauri) return <ScLogin {...p} />;
+  if (p.props.service === "spotify" && isTauri) return <SpLogin {...p} />;
   return <LoginMock {...p} />;
 }
 function LoginMock({ props, close }: P) {

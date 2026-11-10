@@ -246,6 +246,7 @@ pub async fn resolve(track: &TrackInfo) -> Res<StreamInfo> {
         source: "soundcloud".into(),
         source_id: track.id.clone(),
         segments,
+        loudness_lufs: None,
     };
     STREAMS.lock().insert(track.id.clone(), info.clone());
     Ok(info)
@@ -263,4 +264,10 @@ mod tests {
         let txt = "#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:9.9,\nseg0.m4s\n#EXTINF:9.9,\nhttps://cdn.x/seg1.m4s\n#EXT-X-ENDLIST\n";
         assert_eq!(parse_playlist("https://a.b/c/p.m3u8?x=1", txt), vec!["https://a.b/c/init.mp4", "https://a.b/c/seg0.m4s", "https://cdn.x/seg1.m4s"]);
     }
+}
+
+/// Paradas do SoundCloud: `kind` = "top" (mais tocadas) ou "trending" (em alta).
+pub async fn chart(kind: &str, limit: usize) -> Res<Vec<TrackInfo>> {
+    let v = api(&format!("{API}/charts"), &[("kind", kind.into()), ("genre", "soundcloud:genres:all-music".into()), ("limit", limit.clamp(1, 50).to_string())]).await?;
+    Ok(v.get("collection").and_then(|c| c.as_array()).map(|a| a.iter().filter_map(|i| i.get("track")).filter_map(to_track).collect()).unwrap_or_default())
 }

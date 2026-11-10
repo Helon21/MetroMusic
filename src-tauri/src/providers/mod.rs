@@ -4,6 +4,7 @@ pub mod auth;
 pub mod deezer;
 pub mod matcher;
 pub mod sc_account;
+pub mod spotify;
 pub mod soundcloud;
 pub mod youtube;
 pub mod ytmusic;
@@ -28,6 +29,7 @@ pub async fn search(provider: &str, query: &str, limit: usize) -> Res<Vec<TrackI
         "youtube" => youtube::search(query, limit).await,
         "soundcloud" => soundcloud::search(query, limit).await,
         "deezer" => deezer::search(query, limit).await,
+        "spotify" => spotify::search(query, limit).await,
         other => Err(format!("provedor sem busca online: {other}")),
     }
 }
@@ -71,7 +73,8 @@ pub async fn resolve(track: &TrackInfo, order: &[String]) -> Res<StreamInfo> {
     match track.provider.as_str() {
         "youtube" => youtube::resolve(&track.id, track.duration_ms).await,
         "soundcloud" => soundcloud::resolve(track).await,
-        "deezer" => {
+        // Deezer e Spotify não entregam o áudio inteiro (DRM): toca-se a mesma música achada em outro provedor.
+        "deezer" | "spotify" => {
             if let Some(m) = find_match(track, order).await {
                 match resolve_direct(&m).await {
                     Ok(s) => return Ok(s),
@@ -93,12 +96,12 @@ async fn resolve_direct(t: &TrackInfo) -> Res<StreamInfo> {
 }
 
 fn preview_stream(track: &TrackInfo) -> Res<StreamInfo> {
-    let url = track.preview_url.clone().ok_or("Deezer: sem trecho disponível e sem correspondência em outro provedor")?;
+    let url = track.preview_url.clone().ok_or_else(|| format!("{}: sem correspondência em outro provedor para tocar esta faixa", track.provider))?;
     Ok(StreamInfo {
         url,
         headers: vec![("User-Agent".into(), crate::http::BROWSER_UA.into())],
         mime: "audio/mpeg".into(), codec: "mp3".into(), bitrate: 128_000, content_length: None, ext: "mp3".into(),
-        expires_at_ms: now_ms() + 20 * 60 * 1000, source: "deezer-preview".into(), source_id: track.id.clone(), segments: vec![],
+        expires_at_ms: now_ms() + 20 * 60 * 1000, source: "deezer-preview".into(), source_id: track.id.clone(), segments: vec![], loudness_lufs: None,
     })
 }
 
@@ -108,5 +111,26 @@ pub fn invalidate(source: &str, id: &str) {
         "youtube" => youtube::invalidate(id),
         "soundcloud" => soundcloud::invalidate(id),
         _ => {}
+    }
+}
+
+/// Início das fontes que não têm uma tela própria: paradas reais do SoundCloud e do Deezer.
+pub async fn other_home(provider: &str) -> Res<Vec<ytmusic::Section>> {
+    fn list(title: &str, label: &str, tracks: Vec<TrackInfo>) -> Option<ytmusic::Section> {
+        if tracks.is_empty() { return None; }
+        Some(ytmusic::Section { title: title.into(), label: Some(label.into()), layout: "list".into(), items: tracks.into_iter().map(|t| ytmusic::Item { track: Some(t), collection: None }).collect(), more: None })
+    }
+    match provider {
+        "spotify" => spotify::home().await,
+        "soundcloud" => {
+            let (trending, top) = tokio::join!(soundcloud::chart("trending", 24), soundcloud::chart("top", 24));
+            let out: Vec<_> = [list("Em alta", "SoundCloud", trending.unwrap_or_default()), list("Mais tocadas", "SoundCloud", top.unwrap_or_default())].into_iter().flatten().collect();
+            if out.is_empty() { Err("o SoundCloud não devolveu as paradas".into()) } else { Ok(out) }
+        }
+        "deezer" => {
+            let out: Vec<_> = [list("Mais tocadas agora", "Deezer", deezer::chart(48).await?)].into_iter().flatten().collect();
+            if out.is_empty() { Err("o Deezer não devolveu a parada".into()) } else { Ok(out) }
+        }
+        other => Err(format!("a fonte {other} ainda não tem backend")),
     }
 }

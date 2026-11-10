@@ -254,6 +254,9 @@ async fn attempt(c: &'static Client, video_id: &str, expected_ms: Option<u64>, v
     Ok(StreamInfo {
         url: f.url, mime: f.mime, codec: f.codec, bitrate: f.bitrate, content_length: f.content_length, ext: "m4a".into(),
         expires_at_ms: expires, source: "youtube".into(), source_id: video_id.to_string(), segments: vec![],
+        // Mesma regra do MetroFuse: o loudness "perceptual" se houver; senão `loudnessDb` mais o deslocamento de −7 LUFS.
+        loudness_lufs: at(&player, "playerConfig.audioConfig.perceptualLoudnessDb").and_then(|v| v.as_f64())
+            .or_else(|| at(&player, "playerConfig.audioConfig.loudnessDb").and_then(|v| v.as_f64()).map(|d| d - 7.0)),
         // A CDN confere o User-Agent: tem de ser o do cliente que gerou a URL.
         headers: vec![
             ("User-Agent".into(), c.ua.into()),

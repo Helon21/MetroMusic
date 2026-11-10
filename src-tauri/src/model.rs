@@ -64,6 +64,9 @@ pub struct StreamInfo {
     /// Stream HLS: segmento de inicialização + segmentos, na ordem. Vazio nos demais.
     #[serde(default)]
     pub segments: Vec<String>,
+    /// Loudness medido pelo serviço (LUFS), se informado; senão o motor mede enquanto decodifica.
+    #[serde(default)]
+    pub loudness_lufs: Option<f64>,
 }
 
 pub fn now_ms() -> u64 {

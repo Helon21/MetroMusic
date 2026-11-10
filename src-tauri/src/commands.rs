@@ -258,3 +258,88 @@ pub async fn sc_playlist(id: String) -> Res<ytmusic::Page> { providers::sc_accou
 
 #[tauri::command]
 pub async fn sc_rate(track_id: String, like: bool) -> Res<()> { providers::sc_account::rate(&track_id, like).await }
+
+#[tauri::command]
+pub async fn other_home(provider: String) -> Res<Vec<ytmusic::Section>> { providers::other_home(&provider).await }
+
+// ───────── Spotify (conta)
+
+const SP_LABEL: &str = "splogin";
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SpLoginEvent { ok: bool, cancelled: bool, error: Option<String>, account: Option<providers::spotify::Me> }
+
+#[tauri::command]
+pub fn sp_status() -> providers::spotify::Status { providers::spotify::status() }
+
+/// Abre o login oficial do Spotify (PKCE). O retorno para `http://127.0.0.1:8899/callback` é interceptado
+/// na própria janela, sem servidor local. O resultado chega pelo evento `sp:login`.
+#[tauri::command]
+pub async fn sp_login_start(app: AppHandle, client_id: Option<String>) -> Res<()> {
+    if let Some(w) = app.get_webview_window(SP_LABEL) { let _ = w.set_focus(); return Ok(()); }
+    let pkce = providers::spotify::begin(client_id)?;
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    let tx = std::sync::Mutex::new(tx);
+    let win = WebviewWindowBuilder::new(&app, SP_LABEL, WebviewUrl::External(pkce.url.parse().map_err(|e| format!("{e}"))?))
+        .title("Entrar no Spotify").inner_size(520.0, 760.0).center().incognito(true).user_agent(LOGIN_UA)
+        .on_navigation(move |url| {
+            if url.as_str().starts_with(providers::spotify::REDIRECT) {
+                let q: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+                let r = match (q.get("code"), q.get("error")) {
+                    (Some(c), _) => Ok(c.clone()),
+                    (_, Some(e)) => Err(if e == "access_denied" { "você negou o acesso no Spotify".to_string() } else { format!("o Spotify recusou o login ({e})") }),
+                    _ => Err("resposta de login inesperada".to_string()),
+                };
+                if let Ok(t) = tx.lock() { let _ = t.send(r); }
+                return false; // não carrega a página de retorno
+            }
+            true
+        })
+        .build().map_err(|e| format!("não foi possível abrir a janela de login: {e}"))?;
+    let verifier = pkce.verifier;
+    tauri::async_runtime::spawn(async move {
+        let emit = |ev: SpLoginEvent| { let _ = app.emit("sp:login", ev); };
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            match rx.try_recv() {
+                Ok(Ok(code)) => {
+                    let _ = win.close();
+                    return emit(match providers::spotify::finish(&code, &verifier).await {
+                        Ok(m) => SpLoginEvent { ok: true, cancelled: false, error: None, account: Some(m) },
+                        Err(e) => SpLoginEvent { ok: false, cancelled: false, error: Some(e), account: None },
+                    });
+                }
+                Ok(Err(e)) => { let _ = win.close(); return emit(SpLoginEvent { ok: false, cancelled: false, error: Some(e), account: None }); }
+                Err(_) => {}
+            }
+            if app.get_webview_window(SP_LABEL).is_none() { return emit(SpLoginEvent { ok: false, cancelled: true, error: None, account: None }); }
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn sp_login_cancel(app: AppHandle) { if let Some(w) = app.get_webview_window(SP_LABEL) { let _ = w.close(); } }
+
+#[tauri::command]
+pub async fn sp_account() -> Res<Option<providers::spotify::Me>> {
+    if !providers::spotify::is_logged_in() { return Ok(None); }
+    match providers::spotify::me().await {
+        Ok(m) => Ok(Some(m)),
+        Err(e) if e.contains("HTTP 401") || e.contains("HTTP 403") || e.contains("não é válida") => { providers::spotify::logout(); Ok(None) }
+        Err(e) => Err(e),
+    }
+}
+
+#[tauri::command]
+pub fn sp_logout() { providers::spotify::logout() }
+
+#[tauri::command]
+pub async fn sp_library(kind: String) -> Res<ytmusic::Page> { providers::spotify::library(&kind).await }
+
+#[tauri::command]
+pub async fn sp_page(id: String) -> Res<ytmusic::Page> { providers::spotify::page(&id).await }
+
+#[tauri::command]
+pub async fn sp_rate(track_id: String, like: bool) -> Res<()> { providers::spotify::rate(&track_id, like).await }

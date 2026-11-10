@@ -10,6 +10,7 @@ export const backend = isTauri;
 // ───────── YouTube Music (Início, páginas, rádio) — formatos de src-tauri/src/providers/ytmusic.rs
 export interface RCollection { kind: "album" | "playlist" | "artist" | "mix"; id: string; title: string; subtitle: string; artwork?: string | null }
 export interface YtAccountInfo { name: string; email?: string | null; handle?: string | null; avatar?: string | null }
+export interface SpStatus { hasClientId: boolean; loggedIn: boolean; redirect: string }
 export interface ScAccountInfo { id: number; name: string; handle?: string | null; avatar?: string | null }
 export interface RItem { track?: ExtInfo; collection?: RCollection }
 export interface RSection { title: string; label?: string | null; layout: "list" | "carousel" | "grid"; items: RItem[]; more?: string | null }
@@ -27,7 +28,7 @@ export function playbackOrder(): string[] {
   return order.length ? order : ["youtube", "soundcloud"].filter((p) => !off.includes(p));
 }
 
-export const SEARCHABLE = ["youtube", "soundcloud", "deezer"];
+export const SEARCHABLE = ["youtube", "soundcloud", "deezer", "spotify"];
 
 export const engine = {
   search: (provider: string, query: string, limit = 24) => invoke<ExtInfo[]>("search_online", { provider, query, limit }),
@@ -57,6 +58,17 @@ export const engine = {
   scLibrary: (kind: "songs" | "playlists" | "history") => invoke<RPage>("sc_library", { kind }),
   scPlaylist: (id: string) => invoke<RPage>("sc_playlist", { id }),
   scRate: (trackId: string, like: boolean) => invoke("sc_rate", { trackId, like }),
+  otherHome: (provider: string) => invoke<RSection[]>("other_home", { provider }),
+  spStatus: () => invoke<SpStatus>("sp_status"),
+  spLoginStart: (clientId?: string | null) => invoke("sp_login_start", { clientId: clientId || null }),
+  spLoginCancel: () => invoke("sp_login_cancel"),
+  spAccount: () => invoke<ScAccountInfo | null>("sp_account"),
+  spLogout: () => invoke("sp_logout"),
+  spLibrary: (kind: "songs" | "playlists" | "albums" | "artists" | "history") => invoke<RPage>("sp_library", { kind }),
+  spPage: (id: string) => invoke<RPage>("sp_page", { id }),
+  spRate: (trackId: string, like: boolean) => invoke("sp_rate", { trackId, like }),
+  /** Página de uma coleção de qualquer fonte, pelo prefixo do id (`sc:`, `sp:` ou YouTube Music). */
+  page: (id: string) => (id.startsWith("sc:") ? invoke<RPage>("sc_playlist", { id }) : id.startsWith("sp:") ? invoke<RPage>("sp_page", { id }) : invoke<RPage>("yt_page", { browseId: id })),
   ytHome: (chip?: RChip | null, continuation?: string | null) => invoke<RHome>("yt_home", { chipBrowseId: chip?.browseId, chipParams: chip?.params, continuation }),
   ytPage: (browseId: string) => invoke<RPage>("yt_page", { browseId }),
   ytRadio: (videoId?: string | null, playlistId?: string | null) => invoke<ExtInfo[]>("yt_radio", { videoId, playlistId }),

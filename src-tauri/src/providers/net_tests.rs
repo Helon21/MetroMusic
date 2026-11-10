@@ -404,3 +404,15 @@ async fn net_sc_playlist_publica() {
     println!("SCPL {:?}: {} faixas, 1ª {:?}", p.title, p.tracks.len(), p.tracks.first().map(|t| t.title.clone()));
     assert!(!p.tracks.is_empty());
 }
+
+#[tokio::test]
+#[ignore]
+async fn net_inicio_outras_fontes() {
+    for p in ["soundcloud", "deezer"] {
+        match super::other_home(p).await {
+            Ok(s) => println!("INICIO {p}: {}", s.iter().map(|x| format!("{} ({})", x.title, x.items.len())).collect::<Vec<_>>().join("; ")),
+            Err(e) => println!("INICIO {p}: erro {e}"),
+        }
+    }
+    println!("INICIO spotify sem login: {:?}", super::other_home("spotify").await.err());
+}

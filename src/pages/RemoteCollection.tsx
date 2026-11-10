@@ -26,7 +26,7 @@ export default function RemoteCollection({ kind, id }: { kind: string; id: strin
           const list = (await engine.ytRadio(null, id)) ?? [];
           if (!dead) setData({ title: "Mix", subtitle: `${list.length} músicas`, ids: list.map((t) => registerTrack(t).id), sections: [], items: [] });
         } else {
-          const p = id.startsWith("sc:") ? await engine.scPlaylist(id) : await engine.ytPage(id);
+          const p = await engine.page(id);
           if (!p || dead) return;
           registerPage(p);
           setData({ title: p.title, subtitle: p.subtitle, description: p.description, artwork: p.artwork, ids: p.tracks.map((t) => `${t.provider}:${t.id}`), sections: p.sections, items: p.items });

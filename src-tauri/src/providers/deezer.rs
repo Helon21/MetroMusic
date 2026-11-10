@@ -56,3 +56,10 @@ pub async fn track(id: &str) -> Res<TrackInfo> {
     let v: Value = CLIENT.get(format!("{API}/track/{id}")).send().await.map_err(err)?.error_for_status().map_err(err)?.json().await.map_err(err)?;
     to_track(&v).ok_or_else(|| "Deezer: faixa não encontrada".to_string())
 }
+
+/// Parada geral do Deezer (API pública, sem conta).
+pub async fn chart(limit: usize) -> Res<Vec<TrackInfo>> {
+    let body: Value = CLIENT.get(format!("{API}/chart/0/tracks")).query(&[("limit", limit.clamp(1, 100).to_string())])
+        .send().await.map_err(err)?.error_for_status().map_err(err)?.json().await.map_err(err)?;
+    Ok(body.get("data").and_then(|d| d.as_array()).map(|a| a.iter().filter_map(to_track).collect()).unwrap_or_default())
+}

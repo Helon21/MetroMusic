@@ -263,6 +263,7 @@ export function AccountPage() {
   const [tab, setTab] = useState(isTauri ? "songs" : "playlists");
   const yt = accounts.youtube; const sc = accounts.soundcloud; const info = useYt((s) => s.info); const real = isTauri;
   const [scTab, setScTab] = useState<"songs" | "playlists" | "history">("songs");
+  const [spTab, setSpTab] = useState<"songs" | "playlists" | "albums" | "artists" | "history">("songs");
   return (
     <div className="px-8 pt-5 pb-10">
       <div className="flex items-center gap-5 p-6 rounded-3xl bg-s1 mb-8 relative overflow-hidden">
@@ -296,11 +297,16 @@ export function AccountPage() {
           {tab === "podcasts" && [...subs, ...podcasts.map((p) => p.id).filter((id) => !subs.includes(id))].map((id) => <MediaCard key={id} item={{ type: "podcast", id }} />)}
         </Grid>
         {tab === "podcasts" && <div className="flex gap-3 mt-8"><Btn icon={<Clock />} onClick={() => nav("playlist/later")}>Episódios para depois</Btn><Btn variant="ghost" onClick={() => nav("library/podcasts")}>Episódios novos</Btn></div>}
-      </>) : !(real && sc) && <Empty icon={<CircleUser />} title="Você não está conectado" text="Entre com a sua conta para ver playlists, álbuns e artistas salvos."><Btn variant="primary" onClick={() => openDialog("login", { service: "youtube" })}>Entrar</Btn></Empty>}
+      </>) : !(real && (sc || accounts.spotify)) && <Empty icon={<CircleUser />} title="Você não está conectado" text="Entre com a sua conta para ver playlists, álbuns e artistas salvos."><Btn variant="primary" onClick={() => openDialog("login", { service: "youtube" })}>Entrar</Btn></Empty>}
       {real && sc && (<div className={yt ? "mt-12" : ""}>
         <SectionTitle sub="Conteúdo salvo no SoundCloud">No SoundCloud</SectionTitle>
         <div className="flex gap-2 mb-5">{([["songs", "Curtidas"], ["playlists", "Playlists"], ["history", "Histórico"]] as const).map(([v, l]) => <Chip key={v} active={scTab === v} onClick={() => setScTab(v)}>{l}</Chip>)}</div>
         <YtLibraryView provider="soundcloud" kind={scTab} />
+      </div>)}
+      {real && accounts.spotify && (<div className={yt || sc ? "mt-12" : ""}>
+        <SectionTitle sub="Conteúdo salvo no Spotify">No Spotify</SectionTitle>
+        <div className="flex gap-2 mb-5">{([["songs", "Curtidas"], ["playlists", "Playlists"], ["albums", "Álbuns"], ["artists", "Artistas"], ["history", "Recentes"]] as const).map(([v, l]) => <Chip key={v} active={spTab === v} onClick={() => setSpTab(v)}>{l}</Chip>)}</div>
+        <YtLibraryView provider="spotify" kind={spTab} />
       </div>)}
     </div>
   );

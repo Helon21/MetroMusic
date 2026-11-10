@@ -5,7 +5,7 @@ export type SourceId = "youtube" | "tidal" | "spotify" | "soundcloud" | "deezer"
 
 /** Faixa como o backend a descreve (espelha `TrackInfo` em src-tauri/src/model.rs). */
 export interface ExtInfo {
-  provider: "youtube" | "soundcloud" | "deezer"; id: string; title: string; artists: string[];
+  provider: "youtube" | "soundcloud" | "deezer" | "spotify"; id: string; title: string; artists: string[];
   album?: string | null; durationMs?: number | null; isrc?: string | null; artworkUrl?: string | null;
   explicit?: boolean; url?: string | null; previewUrl?: string | null;
   /** ids de navegação do YouTube Music (álbum MPRE…, canal UC…) */

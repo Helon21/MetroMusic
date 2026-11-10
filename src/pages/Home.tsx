@@ -10,6 +10,7 @@ import { useSetting } from "../store/settings";
 import { nav, openDialog, toast, useUI } from "../store/ui";
 import { setSetting } from "../store/settings";
 import YtHome from "./YtHome";
+import RemoteHome from "./RemoteHome";
 import { backend } from "../lib/engine";
 import { BrandTile, SourceIcon, sourceBrand } from "../lib/brands";
 import { MediaCard, resolveItem, Shelf, ShelfCards, TrackTile, useCardWidth, type Item } from "../components/media";
@@ -154,6 +155,7 @@ export default function Home() {
 
   // No app, a fonte YouTube Music mostra o conteúdo real do serviço.
   if (backend && source === "youtube") return <YtHome />;
+  if (backend) return <RemoteHome source={source} />;
   if (loading) return <Skeleton />;
   const loginService = NEEDS_LOGIN[source];
   const needsLogin = loginService && !lib.accounts[loginService];
