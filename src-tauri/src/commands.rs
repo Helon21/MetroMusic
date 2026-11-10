@@ -289,23 +289,24 @@ struct SpLoginEvent { ok: bool, cancelled: bool, error: Option<String>, account:
 #[tauri::command]
 pub fn sp_status() -> providers::spotify::Status { providers::spotify::status() }
 
-/// Abre o login do Spotify no WebView (sessão anônima). O usuário entra em open.spotify.com;
-/// capturamos o cookie `sp_dc` e usamos o Device Flow (Client ID do app desktop oficial) para obter tokens.
-/// O resultado chega pelo evento `sp:login`.
+/// Inicia o Device Authorization Flow: chama /oauth2/device/authorize, devolve a URL de pairing,
+/// abre WebView nessa URL e monitora o cookie sp_dc.
+/// Quando capturado, emite evento `sp:login` com o resultado.
 #[tauri::command]
-pub async fn sp_login_start(app: AppHandle) -> Res<()> {
-    if let Some(w) = app.get_webview_window(SP_LABEL) { let _ = w.set_focus(); return Ok(()); }
-    providers::spotify::begin(None).await?; // só inicializa o fluxo no backend
-    let win = WebviewWindowBuilder::new(&app, SP_LABEL, WebviewUrl::External("https://accounts.spotify.com/en/login?continue=https%3A%2F%2Fopen.spotify.com%2F".parse().map_err(|e| format!("{e}"))?))
+pub async fn sp_login_start(app: AppHandle) -> Res<providers::spotify::DeviceAuth> {
+    if let Some(w) = app.get_webview_window(SP_LABEL) { let _ = w.set_focus(); return Err("janela de login já aberta".into()); }
+    let auth = providers::spotify::begin().await?; // chama /oauth2/device/authorize
+    let win = WebviewWindowBuilder::new(&app, SP_LABEL, WebviewUrl::External(auth.verification_uri_complete.parse().map_err(|e| format!("{e}"))?))
         .title("Entrar no Spotify").inner_size(520.0, 760.0).center().incognito(true).user_agent(LOGIN_UA)
         .build().map_err(|e| format!("não foi possível abrir a janela de login: {e}"))?;
-    // sp_dc pode estar em vários domínios; checamos todos
     let sites = [
         "https://open.spotify.com/",
         "https://accounts.spotify.com/",
         "https://www.spotify.com/",
         "https://spotify.com/",
     ].map(|s| s.parse::<tauri::Url>().unwrap());
+    let device_code = auth.device_code.clone();
+    let verification_uri_complete = auth.verification_uri_complete.clone();
     tauri::async_runtime::spawn(async move {
         let emit = |ev: SpLoginEvent| { let _ = app.emit("sp:login", ev); };
         let mut attempt = 0u32;
@@ -317,7 +318,12 @@ pub async fn sp_login_start(app: AppHandle) -> Res<()> {
                 return emit(SpLoginEvent { ok: false, cancelled: true, error: None, account: None }); 
             }
             let mut sp_dc: Option<String> = None;
-            for site in &sites {
+            for site in &[
+                "https://open.spotify.com/",
+                "https://accounts.spotify.com/",
+                "https://www.spotify.com/",
+                "https://spotify.com/",
+            ].map(|s| s.parse::<tauri::Url>().unwrap()) {
                 if let Ok(cookies) = win.cookies_for_url(site.clone()) {
                     if let Some(c) = cookies.iter().find(|c| c.name() == "sp_dc") {
                         sp_dc = Some(c.value().to_string());
@@ -326,14 +332,14 @@ pub async fn sp_login_start(app: AppHandle) -> Res<()> {
                 }
             }
             if let Some(ref sp_dc) = sp_dc {
-                eprintln!("[spotify login] sp_dc capturado (len={}), attempt={}, fechando janela...", sp_dc.len(), attempt);
+                eprintln!("[spotify login] sp_dc capturado (len={}), attempt={}, chamando finish...", sp_dc.len(), attempt);
             } else if attempt % 10 == 0 {
                 eprintln!("[spotify login] aguardando sp_dc... attempt={}", attempt);
             }
             let Some(sp_dc) = sp_dc else { continue };
             let _ = win.close();
-            eprintln!("[spotify login] chamando providers::spotify::finish...");
-            let result = providers::spotify::finish(&sp_dc).await;
+            eprintln!("[spotify login] chamando providers::spotify::finish(device_code, sp_dc)...");
+            let result = providers::spotify::finish(&device_code, &sp_dc, &verification_uri_complete).await;
             eprintln!("[spotify login] finish result: {:?}", result.is_ok());
             return emit(match result {
                 Ok(m) => SpLoginEvent { ok: true, cancelled: false, error: None, account: Some(m) },
@@ -344,15 +350,16 @@ pub async fn sp_login_start(app: AppHandle) -> Res<()> {
             });
         }
     });
-    Ok(())
+    Ok(auth) // devolve DeviceAuth pro frontend se precisar
 }
 
 #[tauri::command]
 pub fn sp_login_cancel(app: AppHandle) { if let Some(w) = app.get_webview_window(SP_LABEL) { let _ = w.close(); } }
 
 /// Método avançado: o usuário cola o cookie `sp_dc` de open.spotify.com.
+/// Usa fluxo simplificado (só poll no token endpoint, sem device_code).
 #[tauri::command]
-pub async fn sp_login_cookie(sp_dc: String) -> Res<providers::spotify::Me> { providers::spotify::finish(&sp_dc).await }
+pub async fn sp_login_cookie(sp_dc: String) -> Res<providers::spotify::Me> { providers::spotify::finish_simple(&sp_dc).await }
 
 #[tauri::command]
 pub async fn sp_account() -> Res<Option<providers::spotify::Me>> {

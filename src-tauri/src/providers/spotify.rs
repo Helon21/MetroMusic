@@ -17,6 +17,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
+use base32;
+use hmac::{Hmac, Mac};
+use sha1::Sha1;
 
 const API: &str = "https://api.spotify.com/v1";
 const ACCOUNTS: &str = "https://accounts.spotify.com";
@@ -72,32 +75,24 @@ pub fn logout() {
     save();
 }
 
-// ───────── Login via WebView (frontend chama sp_login_start / sp_login_cancel)
+// ───────── Login via WebView (Device Authorization Flow igual MetroFuse)
 
-/// Inicia o fluxo: frontend abre WebView em `https://accounts.spotify.com/en/login?continue=https%3A%2F%2Fopen.spotify.com%2F`
-/// e monitora cookies de `open.spotify.com` / `accounts.spotify.com` / `www.spotify.com` / `spotify.com`.
-/// Quando `sp_dc` aparece, frontend chama `sp_login_cookie(sp_dc)`.
-pub async fn begin(_client_id: Option<String>) -> Res<()> {
-    Ok(()) // só avisa o frontend para abrir o WebView
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceAuth {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub verification_uri_complete: String,
+    pub expires_in: u64,
+    pub interval: u64,
 }
 
-pub fn cancel() {}
-
-/// Recebe o cookie `sp_dc` (e opcionalmente outros cookies do domínio) e troca por tokens via Device Flow.
-pub async fn finish(sp_dc: &str) -> Res<crate::providers::spotify::Me> {
-    if sp_dc.trim().is_empty() { return Err("cookie sp_dc vazio".into()); }
-    let sp_dc = sp_dc.trim().to_string();
-
-    // 1) Device Authorization Request
-    let auth = device_authorize().await?;
-    // 2) Poll do token usando o cookie sp_dc (endpoint /api/token com cookie)
-    let tokens = poll_device_token(&auth.device_code, &sp_dc).await?;
-    store_tokens(&sp_dc, &tokens)?;
-
-    match me().await {
-        Ok(m) => Ok(m),
-        Err(e) => { logout(); Err(e) }
-    }
+#[derive(Debug)]
+struct TokenResponse {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_in: u64,
 }
 
 async fn device_authorize() -> Res<DeviceAuth> {
@@ -118,7 +113,61 @@ async fn device_authorize() -> Res<DeviceAuth> {
     })
 }
 
-async fn poll_device_token(device_code: &str, sp_dc: &str) -> Res<TokenResponse> {
+/// Chama /pair/api/resolve com user_code, flow_ctx, csrf_token (extraídos da página de pairing).
+async fn submit_user_code(sp_dc: &str, user_code: &str, verification_uri_complete: &str) -> Res<()> {
+    // 1) Carrega a página de pairing para extrair flow_ctx e csrf_token
+    let client = CLIENT.clone();
+    
+    let resp = client.get(verification_uri_complete)
+        .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0")
+        .header("Cookie", format!("sp_dc={sp_dc}"))
+        .send().await.map_err(err)?;
+    let html = resp.text().await.map_err(err)?;
+
+    // Extrai flow_ctx da URL (formato: https://accounts.spotify.com/pair?code=XXXX&flow_ctx=YYYY:ZZZZ)
+    let flow_ctx = verification_uri_complete
+        .split("flow_ctx=")
+        .nth(1)
+        .and_then(|s| s.split('&').next())
+        .ok_or("flow_ctx não encontrado na URL de pairing")?;
+    
+    // Extrai csrf_token do HTML
+    let csrf_token = html
+        .split("csrfToken")
+        .nth(1)
+        .and_then(|s| s.split('"').nth(2))
+        .or_else(|| html.split("csrf_token").nth(1).and_then(|s| s.split('"').nth(2)))
+        .ok_or("csrf_token não encontrado na página de pairing")?;
+
+    // 2) POST para /pair/api/resolve
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let flow_ctx_with_ts = format!("{}:{}", flow_ctx, ts);
+
+    let resp = client.post("https://accounts.spotify.com/pair/api/resolve")
+        .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0")
+        .header("x-csrf-token", csrf_token)
+        .header("referer", verification_uri_complete)
+        .header("origin", "https://accounts.spotify.com")
+        .header("Content-Type", "application/json")
+        .header("Cookie", format!("sp_dc={sp_dc}"))
+        .json(&serde_json::json!({ "userCode": user_code }))
+        .query(&[("flow_ctx", flow_ctx_with_ts)])
+        .send().await.map_err(err)?;
+    
+    let status = resp.status();
+    let text = resp.text().await.map_err(err)?;
+    if !status.is_success() {
+        return Err(format!("pair resolve falhou: {} - {}", status, text));
+    }
+    let v: Value = serde_json::from_str(&text).map_err(|e| format!("pair resolve JSON: {e}"))?;
+    let result = v.get("result").and_then(|x| x.as_str()).unwrap_or("");
+    if result != "ok" {
+        return Err(format!("pair resolve result: {}", result));
+    }
+    Ok(())
+}
+
+async fn exchange_device_code(device_code: &str, sp_dc: &str) -> Res<TokenResponse> {
     let start = std::time::Instant::now();
     let mut interval = 5u64;
     loop {
@@ -147,10 +196,129 @@ async fn poll_device_token(device_code: &str, sp_dc: &str) -> Res<TokenResponse>
     }
 }
 
+/// Inicia o Device Authorization Flow: chama /oauth2/device/authorize e devolve a URL de pairing.
+pub async fn begin() -> Res<DeviceAuth> {
+    device_authorize().await
+}
+
+/// Completa o login: após usuário autorizar no WebView, troca device_code por tokens.
+/// Chama /pair/api/resolve com user_code, depois poll no /api/token com sp_dc cookie.
+pub async fn finish(device_code: &str, sp_dc: &str, verification_uri_complete: &str) -> Res<crate::providers::spotify::Me> {
+    if sp_dc.trim().is_empty() { return Err("cookie sp_dc vazio".into()); }
+    let sp_dc = sp_dc.trim().to_string();
+
+    // 1) Submit user_code para /pair/api/resolve (precisa do user_code do DeviceAuth original)
+    // Extraímos o user_code da verification_uri_complete se possível (formato: .../pair?code=USER_CODE&flow_ctx=...)
+    let user_code = verification_uri_complete
+        .split("code=")
+        .nth(1)
+        .and_then(|s| s.split('&').next())
+        .unwrap_or("");
+
+    if !user_code.is_empty() {
+        eprintln!("[spotify finish] chamando submit_user_code com user_code={}", user_code);
+        submit_user_code(&sp_dc, &user_code, verification_uri_complete).await?;
+        eprintln!("[spotify finish] submit_user_code OK");
+    } else {
+        eprintln!("[spotify finish] AVISO: user_code não encontrado na URL, pulando submit_user_code");
+    }
+
+    // 2) Poll do token usando o cookie sp_dc (endpoint /api/token com cookie)
+    let tokens = poll_device_token(device_code, &sp_dc).await?;
+    store_tokens(&sp_dc, &tokens)?;
+
+    match me().await {
+        Ok(m) => Ok(m),
+        Err(e) => { logout(); Err(e) }
+    }
+}
+
+/// Versão simplificada para `sp_login_cookie`: usa o cookie sp_dc para obter web player token
+/// e depois usa esse token como access_token (não usa device flow).
+pub async fn finish_simple(sp_dc: &str) -> Res<crate::providers::spotify::Me> {
+    if sp_dc.trim().is_empty() { return Err("cookie sp_dc vazio".into()); }
+    let sp_dc = sp_dc.trim().to_string();
+
+    // Tenta obter web player access token usando o cookie sp_dc (igual MetroFuse createWebPlayerAccessToken)
+    let tokens = get_web_player_token(&sp_dc).await?;
+    store_tokens(&sp_dc, &tokens)?;
+
+    match me().await {
+        Ok(m) => Ok(m),
+        Err(e) => { logout(); Err(e) }
+    }
+}
+
+async fn get_web_player_token(sp_dc: &str) -> Res<TokenResponse> {
+    let nuance = get_latest_nuance().await?;
+    let server_time = get_spotify_server_time().await?;
+    let totp = generate_totp(&nuance.secret, server_time)?;
+    
+    let url = "https://open.spotify.com/get_access_token"
+        .to_string()
+        + &format!("?reason=transport&productType=web-player&totp={}&totpServer={}&totpVer={}", 
+            totp, totp, nuance.version);
+    
+    let resp = CLIENT.get(url)
+        .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0")
+        .header("Referer", "https://open.spotify.com/")
+        .header("Cookie", format!("sp_dc={sp_dc}"))
+        .send().await.map_err(err)?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(err)?;
+    let v: Value = serde_json::from_str(&text).map_err(|e| format!("web player token: JSON inválido: {e} | body: {}", text.chars().take(500).collect::<String>()))?;
+    if !status.is_success() { return Err(format!("web player token: {}", v.get("error_description").or_else(|| v.get("error")).and_then(|e| e.as_str()).unwrap_or("falhou"))); }
+    
+    let access_token = v.get("accessToken").and_then(|x| x.as_str()).ok_or("sem accessToken")?.to_string();
+    let expires_in = v.get("accessTokenExpirationTimestampMs").and_then(|x| x.as_u64()).map(|ts| (ts.saturating_sub(crate::model::now_ms()) / 1000).max(60)).unwrap_or(3600);
+    
+    Ok(TokenResponse { access_token, refresh_token: None, expires_in })
+}
+
 #[derive(Debug)]
-struct DeviceAuth { device_code: String, user_code: String, verification_uri: String, verification_uri_complete: String, expires_in: u64, interval: u64 }
-#[derive(Debug)]
-struct TokenResponse { access_token: String, refresh_token: Option<String>, expires_in: u64 }
+struct Nuance { secret: String, version: i64 }
+
+async fn get_latest_nuance() -> Res<Nuance> {
+    let resp = CLIENT.get("https://gist.githubusercontent.com/teapotw/0e8d6c2b8f3b4c5d6e7f/raw/nuances.json")
+        .header("User-Agent", "MetroMusic")
+        .header("Accept", "application/vnd.github+json")
+        .send().await.map_err(err)?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(err)?;
+    if !status.is_success() { return Err(format!("nuance gist: HTTP {}", status)); }
+    let arr: Value = serde_json::from_str(&text).map_err(|e| format!("nuance JSON: {e}"))?;
+    let nuance = arr.as_array()
+        .and_then(|a| a.iter().filter_map(|e| {
+            let secret = e.get("s")?.as_str()?;
+            let version = e.get("v")?.as_i64()?;
+            Some(Nuance { secret: secret.to_string(), version })
+        })
+        .max_by_key(|n| n.version))
+        .ok_or("nenhuma nuance válida encontrada")?;
+    Ok(nuance)
+}
+
+fn generate_totp(secret: &str, server_time: u64) -> Result<String, String> {
+    use base32::decode;
+    use hmac::{Hmac, Mac};
+    use sha1::Sha1;
+    let key = decode(base32::Alphabet::Rfc4648 { padding: false }, secret).ok_or("base32 decode falhou")?;
+    let time_step = server_time / 30;
+    let mut mac = Hmac::<Sha1>::new_from_slice(&key).map_err(|e| e.to_string())?;
+    mac.update(&time_step.to_be_bytes());
+    let code = mac.finalize().into_bytes();
+    let offset = (code[19] & 0x0F) as usize;
+    let binary = ((code[offset] as u32 & 0x7F) << 24) | ((code[offset + 1] as u32) << 16) | ((code[offset + 2] as u32) << 8) | (code[offset + 3] as u32);
+    let otp = binary % 1_000_000;
+    Ok(format!("{:06}", otp))
+}
+
+async fn get_spotify_server_time() -> Res<u64> {
+    let resp = CLIENT.get("https://accounts.spotify.com/api/server-time").send().await.map_err(err)?;
+    let text = resp.text().await.map_err(err)?;
+    let v: Value = serde_json::from_str(&text).map_err(|e| format!("server time JSON: {e}"))?;
+    Ok(v.get("serverTime").and_then(|x| x.as_u64()).unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()))
+}
 
 fn store_tokens(sp_dc: &str, tokens: &TokenResponse) -> Res<()> {
     let mut s = STATE.write();
@@ -365,6 +533,35 @@ pub async fn home() -> Res<Vec<Section>> {
     out.extend(shelf("Álbuns salvos", albums.map(|p| p.items).unwrap_or_default()));
     if out.is_empty() { return Err("o Spotify não devolveu nada para a sua Início".into()); }
     Ok(out)
+}
+
+async fn poll_device_token(device_code: &str, sp_dc: &str) -> Res<TokenResponse> {
+    let start = std::time::Instant::now();
+    let mut interval = 5u64;
+    loop {
+        let resp = CLIENT.post(DEVICE_TOKEN_URL)
+            .header("Cookie", format!("sp_dc={sp_dc}"))
+            .form(&[("grant_type", "urn:ietf:params:oauth:grant-type:device_code"), ("device_code", device_code), ("client_id", DEVICE_CLIENT_ID)])
+            .send().await.map_err(err)?;
+        let status = resp.status();
+        let text = resp.text().await.map_err(err)?;
+        let v: Value = serde_json::from_str(&text).map_err(|e| format!("device token: JSON inválido: {e} | body: {}", text.chars().take(500).collect::<String>()))?;
+        if status.is_success() {
+            return Ok(TokenResponse {
+                access_token: v.get("access_token").and_then(|x| x.as_str()).ok_or("sem access_token")?.to_string(),
+                refresh_token: v.get("refresh_token").and_then(|x| x.as_str()).map(str::to_string),
+                expires_in: v.get("expires_in").and_then(|x| x.as_u64()).unwrap_or(3600),
+            });
+        }
+        let err_code = v.get("error").and_then(|x| x.as_str()).unwrap_or("");
+        if err_code == "authorization_pending" || err_code == "slow_down" {
+            if err_code == "slow_down" { interval *= 2; }
+            if start.elapsed() > Duration::from_secs(300) { return Err("tempo esgotado aguardando autorização".into()); }
+            tokio::time::sleep(Duration::from_secs(interval)).await;
+            continue;
+        }
+        return Err(format!("Spotify device token: {}", v.get("error_description").or_else(|| v.get("error")).and_then(|e| e.as_str()).unwrap_or("falhou")));
+    }
 }
 
 pub async fn rate(track_id: &str, like: bool) -> Res<()> {
