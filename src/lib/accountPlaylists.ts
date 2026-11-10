@@ -63,10 +63,24 @@ export async function removeFromAccountPlaylist(p: AccountProvider, playlistId: 
   } catch (err) { toast(`Não foi possível remover: ${err}`); }
 }
 
+/** O item está na biblioteca da conta agora? (leitura real; o YouTube Music pode levar alguns segundos para refletir) */
+async function inLibrary(p: AccountProvider, kind: "album" | "playlist" | "artist", id: string): Promise<boolean> {
+  const list = kind === "album" ? "albums" : kind === "artist" ? "artists" : "playlists";
+  const page = await (p === "spotify" ? engine.spLibrary(list) : engine.ytLibrary(list));
+  const bare = (x: string) => x.replace(/^VL/, "");
+  return (page?.items ?? []).some((i) => i.collection && (i.collection.id === id || bare(i.collection.id) === bare(id)));
+}
+
 export async function saveToLibrary(p: AccountProvider, kind: "album" | "playlist" | "artist", id: string, save: boolean) {
   try {
     await engine.librarySave(p, kind, id, save);
-    toast(save ? (kind === "artist" ? "Você segue este artista" : "Salvo na sua biblioteca") : (kind === "artist" ? "Você deixou de seguir" : "Removido da sua biblioteca"));
-    notifyRemoteChanged();
-  } catch (e) { toast(`Não foi possível alterar a biblioteca: ${e}`); }
+  } catch (e) { toast(`Não foi possível alterar a biblioteca: ${e}`); return; }
+  const done = save ? (kind === "artist" ? "Você segue este artista" : "Salvo na sua biblioteca") : (kind === "artist" ? "Você deixou de seguir" : "Removido da sua biblioteca");
+  // confere de verdade lendo a biblioteca (até ~12 s)
+  for (let i = 0; i < 6; i++) {
+    await new Promise((r) => setTimeout(r, i === 0 ? 1500 : 2000));
+    try { if ((await inLibrary(p, kind, id)) === save) { toast(`${done} · confirmado em ${providerName(p)}`); notifyRemoteChanged(); return; } } catch { /* tenta de novo */ }
+  }
+  toast(`${providerName(p)} aceitou, mas ainda não apareceu na biblioteca. Pode levar alguns instantes; atualize a tela depois.`);
+  notifyRemoteChanged();
 }

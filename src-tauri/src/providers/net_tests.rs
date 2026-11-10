@@ -622,3 +622,50 @@ async fn net_yt_salvar_e_seguir_com_espera() {
     let (p_rem, td) = ate("playlists", &pl, false).await;
     println!("YTG playlist de terceiros: apareceu na biblioteca={p_sal} (em ~{tc}s); sumiu depois de remover={p_rem} (em ~{td}s)");
 }
+
+/// Salva de verdade playlists reais de vários tipos e confere quais ficam na biblioteca. NUNCA mexe no que já estava salvo.
+#[tokio::test]
+#[ignore]
+async fn net_yt_salvar_varios_tipos() {
+    use super::ytmusic as yt;
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let mut fontes: Vec<yt::Explore> = vec![];
+    for (id, p) in [("FEmusic_charts", None), ("FEmusic_explore", None), ("FEmusic_moods_and_genres_category", Some("ggMPOg1uX1JOQWZFeDByc2Jm")), ("FEmusic_moods_and_genres_category", Some("ggMPOg1xTkdfUUFZX0F3QWVn"))] {
+        if let Ok(e) = yt::explore(id, p).await { fontes.push(e); }
+    }
+    let lib0 = yt::library("playlists").await.unwrap();
+    let na_biblioteca: std::collections::HashSet<String> = lib0.items.iter().filter_map(|i| i.collection.as_ref()).map(|c| c.id.trim_start_matches("VL").to_string()).collect();
+    let mut prefixos = std::collections::HashSet::new();
+    let mut cand = vec![];
+    for e in &fontes { for sec in &e.sections { for i in &sec.items { if let Some(c) = &i.collection {
+        let chave = c.id.trim_start_matches("VL").chars().take(4).collect::<String>();
+        if c.kind == "playlist" && !na_biblioteca.contains(c.id.trim_start_matches("VL")) && prefixos.insert(chave) { cand.push((c.id.clone(), c.title.clone())); }
+    } } } }
+    println!("YTV {} candidatos de prefixos diferentes (nenhum já salvo)", cand.len());
+    for (id, title) in cand.into_iter().take(8) {
+        let r = yt::library_save("playlist", &id, true).await;
+        let mut ok = false;
+        for _ in 0..6 { tokio::time::sleep(std::time::Duration::from_secs(2)).await; let l = yt::library("playlists").await.unwrap(); if l.items.iter().filter_map(|i| i.collection.as_ref()).any(|c| c.id.trim_start_matches("VL") == id.trim_start_matches("VL")) { ok = true; break; } }
+        let _ = yt::library_save("playlist", &id, false).await; // só desfaz o que ESTE teste salvou
+        println!("YTV {:6} chamada={} ficou salva={ok} — {title:?}", id.trim_start_matches("VL").chars().take(6).collect::<String>(), match &r { Ok(_) => "ok".to_string(), Err(e) => format!("ERRO {e}") });
+    }
+}
+
+/// Restaura a playlist que um teste removeu por engano.
+#[tokio::test]
+#[ignore]
+async fn net_yt_restaurar_recap() {
+    use super::ytmusic as yt;
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let id = "VLLRSRIZEb4lrETswxF7mj1U71QzPbkrDdZ3y2g";
+    println!("YTR salvar: {:?}", yt::library_save("playlist", id, true).await);
+    for s in 0..8 {
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let lib = yt::library("playlists").await.unwrap();
+        let tem = lib.items.iter().filter_map(|i| i.collection.as_ref()).any(|c| c.id == id);
+        println!("YTR após {}s: March-May Recap na biblioteca = {tem} (total {})", (s + 1) * 3, lib.items.len());
+        if tem { break; }
+    }
+}

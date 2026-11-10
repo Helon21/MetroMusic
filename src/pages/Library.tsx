@@ -8,6 +8,8 @@ import { useSetting } from "../store/settings";
 import { nav, openDialog, toast, useUI } from "../store/ui";
 import { Grid, MediaCard, resolveItem, TrackList, type Item } from "../components/media";
 import { Btn, Chip, Cover, Empty, IconBtn, SectionTitle } from "../components/ui";
+import { isTauri } from "../lib/native";
+import YtLibraryView from "./YtLibraryView";
 
 const TABS: [string, string][] = [["mix", "Tudo"], ["playlists", "Playlists"], ["songs", "Músicas"], ["albums", "Álbuns"], ["artists", "Artistas"], ["podcasts", "Podcasts"]];
 const SORTS: Record<string, [string, string][]> = {
@@ -97,6 +99,10 @@ export default function Library({ tab = "playlists" }: { tab?: string }) {
     : tab === "mix" ? [...playlistItems(), ...albumItems(), ...artistItems(), ...lib.subscribedPodcasts.map((id) => ({ type: "podcast" as const, id }))].sort((a, b) => s === "name" ? dir((resolveItem(a, lib)?.title ?? "").localeCompare(resolveItem(b, lib)?.title ?? "", "pt-BR")) : 0)
     : [];
   const podcastEpisodes = f === "later" ? lib.later : f === "downloaded" ? downloaded.filter((id) => getTrack(id)?.episode) : f === "new" ? lib.subscribedPodcasts.flatMap((id) => getPodcast(id)?.episodeIds.slice(0, 2) ?? []) : [];
+  // O que está salvo nas contas conectadas (a biblioteca do YouTube Music, do Spotify e do SoundCloud)
+  const accountSections = (isTauri && (tab === "playlists" || tab === "albums" || tab === "artists")
+    ? ([["youtube", "YouTube Music"], ["spotify", "Spotify"], ["soundcloud", "SoundCloud"]] as const).filter(([p]) => !!lib.accounts[p] && (p !== "soundcloud" || tab === "playlists"))
+    : []);
   const upload = () => { setUploading(0); let n = 0; const t = setInterval(() => { n++; if (n > 4) { clearInterval(t); setUploading(null); toast("Envio concluído"); } else setUploading(n); }, 600); };
   const empty: Record<string, [string, string]> = { playlists: ["Suas playlists aparecem aqui", "Crie a primeira ou importe de outro serviço."], albums: ["Os álbuns da biblioteca aparecem aqui", "Salve um álbum para encontrá-lo depois."], artists: ["Os artistas da biblioteca aparecem aqui", "Siga artistas para acompanhar os lançamentos."], songs: ["As músicas da biblioteca aparecem aqui", "Curta ou baixe músicas para vê-las nesta lista."], mix: ["Sua biblioteca está vazia", ""], podcasts: ["Nenhum programa salvo", "Salve um podcast para acompanhar os episódios."] };
 
@@ -118,6 +124,13 @@ export default function Library({ tab = "playlists" }: { tab?: string }) {
       </div>
       {FILTERS[tab] && <div className="flex gap-2 mb-5">{FILTERS[tab].map(([v, l]) => <Chip key={v} active={f === v} onClick={() => setFilter({ ...filter, [tab]: v })}>{l}</Chip>)}</div>}
 
+      {accountSections.map(([p, name]) => (
+        <section key={p} className="mb-10">
+          <SectionTitle sub="Salvo na sua conta">{name}</SectionTitle>
+          <YtLibraryView provider={p} kind={tab as "playlists" | "albums" | "artists"} filter={q} />
+        </section>
+      ))}
+      {accountSections.length > 0 && <SectionTitle sub="Fica só nesta instalação do MetroMusic">Neste computador</SectionTitle>}
       {tab === "songs" ? (
         <div className="-mx-3">
           <div className="flex items-center gap-3 px-3 mb-3">
