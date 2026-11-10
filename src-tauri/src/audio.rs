@@ -840,3 +840,75 @@ fn decode_loop(
         b.data.extend(out.iter().copied());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sine(freq: f32, amp: f32, fs: f32, secs: f32) -> Vec<f32> {
+        (0..(fs * secs) as usize).flat_map(|i| { let v = amp * (2.0 * std::f32::consts::PI * freq * i as f32 / fs).sin(); [v, v] }).collect()
+    }
+    fn rms(x: &[f32]) -> f32 { (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt() }
+
+    #[test]
+    fn equalizador_aplica_o_ganho_na_frequencia_da_banda() {
+        let fs = 48_000.0;
+        for (band, gain) in [(5usize, 6.0f32), (2, -9.0), (8, 4.0)] {
+            let mut eq = Eq::new();
+            eq.on = true; eq.pre = 1.0; eq.ver = 0;
+            for i in 0..EQ_BANDS { eq.active[i] = i == band; eq.coef[i] = if i == band { Biquad::peaking(EQ_FREQS[i], gain, EQ_Q, fs) } else { Biquad::IDENTITY }; }
+            let input = sine(EQ_FREQS[band], 0.1, fs, 1.0);
+            let out: Vec<f32> = input.chunks_exact(2).map(|f| eq.process(0, f[0])).collect();
+            let measured = 20.0 * (rms(&out[24_000..]) / rms(&input.iter().step_by(2).copied().collect::<Vec<_>>()[24_000..])).log10();
+            assert!((measured - gain).abs() < 0.3, "banda {band}: esperado {gain} dB, medido {measured:.2} dB");
+        }
+    }
+
+    #[test]
+    fn equalizador_nao_mexe_em_frequencias_distantes() {
+        let fs = 48_000.0;
+        let mut eq = Eq::new();
+        eq.on = true; eq.pre = 1.0;
+        eq.active[1] = true; eq.coef[1] = Biquad::peaking(EQ_FREQS[1], 12.0, EQ_Q, fs); // +12 dB em 62 Hz
+        let input = sine(8000.0, 0.1, fs, 1.0);
+        let out: Vec<f32> = input.chunks_exact(2).map(|f| eq.process(0, f[0])).collect();
+        let mono: Vec<f32> = input.iter().step_by(2).copied().collect();
+        let diff = 20.0 * (rms(&out[24_000..]) / rms(&mono[24_000..])).log10();
+        assert!(diff.abs() < 0.2, "8 kHz mudou {diff:.2} dB com a banda de 62 Hz");
+    }
+
+    #[test]
+    fn medidor_de_loudness_confere_com_a_referencia_bs1770() {
+        // BS.1770: seno de 997 Hz em escala cheia em UM canal = −3,01 LUFS; nos dois canais, a energia dobra = 0 LUFS
+        let fs = 48_000.0;
+        let both = sine(997.0, 1.0, fs, 6.0);
+        let mut m = Meter::new(fs as f64);
+        m.push(&both);
+        let stereo = m.lufs().expect("medição");
+        assert!(stereo.abs() < 0.2, "dois canais: {stereo:.2} LUFS");
+        let one: Vec<f32> = both.chunks_exact(2).flat_map(|f| [f[0], 0.0]).collect();
+        let mut o = Meter::new(fs as f64);
+        o.push(&one);
+        let mono = o.lufs().unwrap();
+        assert!((mono + 3.01).abs() < 0.2, "um canal: {mono:.2} LUFS");
+        // −20 dB na amplitude = −20 LU
+        let mut q = Meter::new(fs as f64);
+        q.push(&sine(997.0, 0.1, fs, 6.0));
+        let quiet = q.lufs().unwrap();
+        assert!((quiet - (stereo - 20.0)).abs() < 0.2, "−20 dB: {quiet:.2} LUFS (cheia {stereo:.2})");
+    }
+
+    #[test]
+    fn silencio_nao_tem_loudness() {
+        let mut m = Meter::new(48_000.0);
+        m.push(&vec![0.0f32; 48_000 * 2 * 4]);
+        assert!(m.lufs().is_none());
+    }
+
+    #[test]
+    fn limitador_suave_nunca_passa_de_um() {
+        assert_eq!(soft_clip(0.5), 0.5);
+        for x in [0.95f32, 1.0, 1.5, 4.0, -3.0] { assert!(soft_clip(x).abs() <= 1.0, "{x} -> {}", soft_clip(x)); }
+        assert!(soft_clip(2.0) > soft_clip(1.0)); // continua crescendo (sem platô duro)
+    }
+}

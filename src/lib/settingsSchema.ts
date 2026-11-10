@@ -131,20 +131,6 @@ export const PAGES: Page[] = [
       tg("skipSilenceInstant", "Pular silêncio instantaneamente", false, "Salta em vez de acelerar", "skipSilence"),
       link("Equalizador", "equalizer", "Perfis paramétricos e assistente AutoEQ"),
     ] },
-    { title: "Equalizador", items: [
-      tg("eqOn", "Equalizador ativado", true),
-      sl("eqPreamp", "Pré-amplificação", 0, -12, 6, 0.1, "dB", "Ganho global antes do equalizador"),
-      sl("eq31", "31 Hz", 0, -12, 12, 0.5, "dB"),
-      sl("eq62", "62 Hz", 0, -12, 12, 0.5, "dB"),
-      sl("eq125", "125 Hz", 0, -12, 12, 0.5, "dB"),
-      sl("eq250", "250 Hz", 0, -12, 12, 0.5, "dB"),
-      sl("eq500", "500 Hz", 0, -12, 12, 0.5, "dB"),
-      sl("eq1k", "1 kHz", 0, -12, 12, 0.5, "dB"),
-      sl("eq2k", "2 kHz", 0, -12, 12, 0.5, "dB"),
-      sl("eq4k", "4 kHz", 0, -12, 12, 0.5, "dB"),
-      sl("eq8k", "8 kHz", 0, -12, 12, 0.5, "dB"),
-      sl("eq16k", "16 kHz", 0, -12, 12, 0.5, "dB"),
-    ] },
     { title: "Transições", items: [
       tg("crossfade", "Crossfade", false, "A música atual some enquanto a próxima entra"),
       sl("crossfadeDuration", "Duração do crossfade", 5, 1, 12, 1, "s", undefined, "crossfade"),
@@ -425,5 +411,7 @@ export const PAGES: Page[] = [
   { id: "about", title: "Sobre", desc: "Versão, créditos e licença", group: "Sistema", sections: [{ items: [custom("about")] }] },
 ];
 
-export const DEFAULTS: Record<string, any> = { themeMode: "dark", palette: "deep_purple", providerOff: [], lyricsOff: ["qq", "kugou"], alarms: [] };
+/** Equalizador (a tela própria edita estes valores; não aparecem na lista de configurações). */
+const EQ_DEFAULTS = { eqOn: true, eqPreamp: 0, eq31: 0, eq62: 0, eq125: 0, eq250: 0, eq500: 0, eq1k: 0, eq2k: 0, eq4k: 0, eq8k: 0, eq16k: 0 };
+export const DEFAULTS: Record<string, any> = { ...EQ_DEFAULTS, themeMode: "dark", palette: "deep_purple", providerOff: [], lyricsOff: ["qq", "kugou"], alarms: [] };
 for (const p of PAGES) for (const s of p.sections) for (const it of s.items) if ("k" in it) DEFAULTS[it.k] = it.def;

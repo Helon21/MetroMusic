@@ -61,7 +61,8 @@ export const engine = {
   scRate: (trackId: string, like: boolean) => invoke("sc_rate", { trackId, like }),
   otherHome: (provider: string) => invoke<RSection[]>("other_home", { provider }),
   spStatus: () => invoke<SpStatus>("sp_status"),
-  spLoginStart: (clientId?: string | null) => invoke("sp_login_start", { clientId: clientId || null }),
+  spLoginStart: () => invoke("sp_login_start"),
+  spLoginCookie: (spDc: string) => invoke<SpAccountInfo>("sp_login_cookie", { spDc }),
   spLoginCancel: () => invoke("sp_login_cancel"),
   spAccount: () => invoke<SpAccountInfo | null>("sp_account"),
   spLogout: () => invoke("sp_logout"),
@@ -82,4 +83,6 @@ export const engine = {
   setNormalization: (on: boolean, target: number) => invoke("audio_set_normalization", { on, target }),
   setCrossfade: (secs: number) => invoke("audio_set_crossfade", { secs }),
   advance: () => invoke("audio_advance"),
+  /** Faixa que toca depois da atual (null remove): o motor a carrega e faz a transição sozinho. */
+  setNext: (track: ExtInfo | null, gaplessPair: boolean) => invoke("audio_set_next", { track, order: playbackOrder(), gaplessPair }),
 };

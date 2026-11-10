@@ -227,6 +227,32 @@ export function syncPrecache() {
   }, 250);
 }
 
+/** Qual é a próxima faixa da fila (a mesma lógica de `next`, sem os casos que precisam buscar mais músicas). */
+export function nextCandidate(s: { queue: string[]; index: number; repeat: string }): { index: number; id: string } | null {
+  if (!s.queue.length) return null;
+  if (s.repeat === "one") return { index: s.index, id: s.queue[s.index] };
+  if (s.index < s.queue.length - 1) return { index: s.index + 1, id: s.queue[s.index + 1] };
+  if (s.repeat === "all" && s.queue.length > 1) return { index: 0, id: s.queue[0] };
+  return null;
+}
+
+let nextTimer: ReturnType<typeof setTimeout> | undefined;
+/** Entrega ao motor a próxima faixa real (gapless sempre; crossfade se ligado). */
+export function syncNext() {
+  if (!backend) return;
+  clearTimeout(nextTimer);
+  nextTimer = setTimeout(() => {
+    const s = usePlayer.getState();
+    const cur = getTrack(s.queue[s.index]);
+    const c = nextCandidate(s);
+    const nx = c ? getTrack(c.id) : undefined;
+    if (!cur?.ext || !nx?.ext || !getSetting("autoplay")) return void engine.setNext(null, false);
+    // álbum contínuo: mesma coleção real nas duas faixas e a opção "desativar em álbuns sem pausa" ligada
+    const pair = !!getSetting("crossfadeGapless") && !!cur.ext.albumId && cur.ext.albumId === nx.ext.albumId;
+    engine.setNext(nx.ext, pair);
+  }, 300);
+}
+
 /** Liga os eventos `audio:*` ao player e leva ao backend as configurações de volume, cache, pré-cache, EQ, normalização e crossfade. */
 export async function initBackend() {
   if (!backend) return;
@@ -256,15 +282,19 @@ export async function initBackend() {
     if (p.duration) fixDuration(p.duration);
   });
   await onEvent<any>("audio:ended", (p) => { if (fresh(p)) P.getState().trackEnded(); });
+  // O motor passou sozinho para a faixa pré-carregada (gapless ou crossfade): só acompanha o índice, sem tocar de novo.
   await onEvent<any>("audio:advanced", (p) => {
-    if (!fresh(p)) return;
     const s = P.getState();
-    const nextIdx = s.index + 1;
-    if (nextIdx < s.queue.length) {
-      P.setState({ index: nextIdx, position: 0, playing: true, buffering: true });
-      engine.play(getTrack(s.queue[nextIdx])!.ext!, 0).then((token) => { if (token && token > P.getState().engineToken) P.setState({ engineToken: token }); });
-    }
+    let idx = nextCandidate(s)?.index ?? -1;
+    if (idx < 0 || s.queue[idx] !== p.key) idx = s.queue.findIndex((id, i) => i > s.index && id === p.key); // a fila mudou no meio do caminho
+    if (idx < 0) idx = s.queue.indexOf(p.key);
+    if (idx < 0) return;
+    P.setState({ index: idx, position: 0, playing: true, buffering: false, error: null, engineToken: Math.max(s.engineToken, p.token), info: { key: p.key, source: p.source, codec: p.codec, bitrate: p.bitrate } });
+    if (p.duration) fixDuration(p.duration);
+    if (!getSetting("pauseHistory")) useLib.getState().pushHistory(p.key);
   });
+  // a faixa atual carregou: agora dá para entregar a próxima ao motor
+  await onEvent<any>("audio:loaded", () => syncNext());
 
   const syncCache = () => { const mb = Number(getSetting("maxSongCache")); engine.cacheConfigure(mb < 0 ? 1_000_000 : mb, !!getSetting("songCache")); };
   const syncAudio = () => {
@@ -283,15 +313,15 @@ export async function initBackend() {
   };
   syncCache(); syncAudio();
   const s0 = P.getState(); engine.setVolume(s0.muted ? 0 : s0.volume); engine.setSpeed(s0.speed);
-  P.subscribe((s, prev) => { if (s.queue !== prev.queue || s.index !== prev.index || s.repeat !== prev.repeat) syncPrecache(); });
+  P.subscribe((s, prev) => { if (s.queue !== prev.queue || s.index !== prev.index || s.repeat !== prev.repeat) { syncPrecache(); syncNext(); } });
   const watched = ["songCache", "maxSongCache", "preload", "providerOrder", "providerOff",
-    "normalization", "loudnessLevel", "crossfade", "crossfadeDuration",
+    "normalization", "loudnessLevel", "crossfade", "crossfadeDuration", "crossfadeGapless", "autoplay",
     "eqOn", "eqPreamp", "eq31", "eq62", "eq125", "eq250", "eq500", "eq1k", "eq2k", "eq4k", "eq8k", "eq16k"];
   const read = () => JSON.stringify(watched.map((k) => getSetting(k)));
   let last = read();
   useSettings.subscribe(() => {
     const now = read(); if (now === last) return; last = now;
-    syncCache(); syncPrecache(); syncAudio();
+    syncCache(); syncPrecache(); syncAudio(); syncNext();
   });
   syncPrecache();
 }

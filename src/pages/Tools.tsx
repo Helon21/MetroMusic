@@ -234,12 +234,12 @@ export function EqualizerPage() {
   const on = useSetting<boolean>("eqOn");
   const preamp = useSetting<number>("eqPreamp");
   const gains = FREQ_KEYS.map((k) => useSetting<number>(k));
-  const activeId = useRef<string>("flat");
+  const [activeId, setActiveId] = useState("flat");
 
-  const p = PRESETS.find((x) => x.id === activeId.current) ?? PRESETS[0];
+  const p = PRESETS.find((x) => x.id === activeId) ?? PRESETS[0];
 
   const applyAndSelect = (profile: Profile) => {
-    activeId.current = profile.id;
+    setActiveId(profile.id);
     applyProfile(profile);
   };
 
@@ -261,9 +261,9 @@ export function EqualizerPage() {
         <div>
           <div className="text-[0.72rem] font-semibold uppercase tracking-wider text-t3 mb-2 px-1">Perfis</div>
           <div className="space-y-1">{PRESETS.map((x) => (
-            <div key={x.id} role="button" onClick={() => applyAndSelect(x)} className={cx("group w-full flex items-center gap-3 h-12 px-3 rounded-xl text-left transition-colors", x.id === activeId.current ? "bg-accent-soft" : "hover:bg-s2")}>
-              {x.auto ? <Headphones className="size-4.5 text-t3 shrink-0" /> : <SlidersHorizontal className="size-4.5 text-t3 shrink-0" />}<span className={cx("flex-1 truncate font-medium text-[0.9rem]", x.id === activeId.current && "text-accent")}>{x.name}</span>
-              {x.id.startsWith("c") && <IconBtn label="Apagar perfil" size={28} className="opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); openDialog("confirm", { title: "Apagar perfil?", text: `Tem certeza de que quer apagar "${x.name}"? Esta ação não pode ser desfeita.`, confirm: "Apagar", danger: true, action: () => { const idx = PRESETS.findIndex((y) => y.id === x.id); if (idx >= 0) PRESETS.splice(idx, 1); if (activeId.current === x.id) { activeId.current = "flat"; applyProfile(PRESETS[0]); } toast("Perfil apagado"); } }); }}><Trash2 /></IconBtn>}
+            <div key={x.id} role="button" onClick={() => applyAndSelect(x)} className={cx("group w-full flex items-center gap-3 h-12 px-3 rounded-xl text-left transition-colors", x.id === activeId ? "bg-accent-soft" : "hover:bg-s2")}>
+              {x.auto ? <Headphones className="size-4.5 text-t3 shrink-0" /> : <SlidersHorizontal className="size-4.5 text-t3 shrink-0" />}<span className={cx("flex-1 truncate font-medium text-[0.9rem]", x.id === activeId && "text-accent")}>{x.name}</span>
+              {x.id.startsWith("c") && <IconBtn label="Apagar perfil" size={28} className="opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); openDialog("confirm", { title: "Apagar perfil?", text: `Tem certeza de que quer apagar "${x.name}"? Esta ação não pode ser desfeita.`, confirm: "Apagar", danger: true, action: () => { const idx = PRESETS.findIndex((y) => y.id === x.id); if (idx >= 0) PRESETS.splice(idx, 1); if (activeId === x.id) { setActiveId("flat"); applyProfile(PRESETS[0]); } toast("Perfil apagado"); } }); }}><Trash2 /></IconBtn>}
             </div>))}</div>
         </div>
         <div className={cx("rounded-3xl bg-s1 p-6 transition-opacity", !on && "opacity-60")}>

@@ -10,7 +10,7 @@ import { BrandTile, SourceIcon, type BrandId } from "../lib/brands";
 import { cancelLogin, loginCookie, loginWeb, logout, useYt } from "../lib/account";
 import { loginLastfm, useLastfm } from "../lib/lastfm";
 import { cancelScLogin, loginScToken, loginScWeb, useSc } from "../lib/soundcloud";
-import { cancelSpLogin, loginSp, useSp } from "../lib/spotify";
+import { cancelSpLogin, loginSp, loginSpCookie, useSp } from "../lib/spotify";
 import { isTauri, toggleMiniWindow } from "../lib/native";
 import { getSetting, setSetting, useSetting } from "../store/settings";
 import { nav, toast, useUI } from "../store/ui";
@@ -291,25 +291,25 @@ function YtLogin({ close }: P) {
   );
 }
 function SpLogin({ close }: P) {
-  const { status, error, info, hasClientId, redirect } = useSp();
-  const [cid, setCid] = useState("");
+  const { status, error, info } = useSp();
+  const [mode, setMode] = useState<"web" | "cookie">("web"); const [dc, setDc] = useState("");
   useEffect(() => { if (info) close(); }, [info]); // eslint-disable-line react-hooks/exhaustive-deps
   const waiting = status === "waiting";
   return (
-    <Modal title="Entrar no Spotify" width={480} onClose={() => { if (waiting) cancelSpLogin(); close(); }}>
+    <Modal title="Entrar no Spotify" width={470} onClose={() => { if (waiting) cancelSpLogin(); close(); }}>
       <div className="flex justify-center mb-5"><BrandTile id="spotify" size={64} className="rounded-2xl" /></div>
+      <div className="flex justify-center mb-5"><div className="inline-flex p-1 rounded-full bg-s2">{(["web", "cookie"] as const).map((m) => <button key={m} onClick={() => !waiting && setMode(m)} className={cx("h-8 px-4 rounded-full text-[0.86rem] font-medium", mode === m ? "bg-accent text-accent-fg" : "text-t2")}>{m === "web" ? "Login pela web" : "Colar cookie sp_dc"}</button>)}</div></div>
       {waiting ? (
-        <div className="grid place-items-center gap-3 text-t2 py-4 text-center"><Spinner className="size-7" /><div>Termine o login na janela do Spotify que abriu.<br /><span className="text-t3 text-[0.86rem]">Ela fecha sozinha depois que você autorizar.</span></div><Btn variant="ghost" onClick={cancelSpLogin}>Cancelar</Btn></div>
-      ) : (<>
-        {!hasClientId && <>
-          <p className="text-t2 text-[0.88rem] mb-3">O Spotify exige um app para cada pessoa. Em <b>developer.spotify.com/dashboard</b> crie um app (grátis), marque <b>Web API</b> e cadastre este endereço em <b>Redirect URIs</b>:</p>
-          <div className="mb-3 p-2.5 rounded-lg bg-s2 font-mono text-[0.82rem] break-all select-all">{redirect}</div>
-          <Field label="Client ID" hint="Copie da página do seu app. Não há segredo para guardar: o login usa PKCE."><TextField autoFocus value={cid} onChange={setCid} placeholder="ex.: 3f9a…" /></Field></>}
-        {hasClientId && <p className="text-t2 text-center mb-5">Uma janela do Spotify vai abrir para você autorizar o MetroMusic. A senha não passa por aqui.</p>}
-        {error && <p className="mb-3 text-[0.86rem] text-danger">{error}</p>}
-        <Btn variant="primary" className="w-full" icon={<LogIn />} disabled={!hasClientId && !cid.trim()} onClick={() => loginSp(cid)}>Continuar no Spotify</Btn>
-        <p className="text-t3 text-[0.8rem] mt-3 text-center">As músicas tocam pelo YouTube Music ou SoundCloud: o áudio do Spotify é protegido.</p>
+        <div className="grid place-items-center gap-3 text-t2 py-4 text-center"><Spinner className="size-7" /><div>Termine o login na janela do Spotify, se ela estiver aberta.<br /><span className="text-t3 text-[0.86rem]">Ela fecha sozinha quando a conta for reconhecida.</span></div><Btn variant="ghost" onClick={cancelSpLogin}>Cancelar</Btn></div>
+      ) : mode === "web" ? (<>
+        <p className="text-t2 text-center mb-5">Uma janela do Spotify vai abrir para você entrar. O MetroMusic guarda só o cookie da sessão, neste computador, e não a senha.</p>
+        <Btn variant="primary" className="w-full" icon={<LogIn />} onClick={loginSp}>Continuar no Spotify</Btn>
+      </>) : (<>
+        <Field label="Cookie sp_dc" hint="Em open.spotify.com já logado, abra o F12 › Aplicativo › Cookies e copie o valor do cookie sp_dc."><TextField multiline value={dc} onChange={setDc} placeholder="AQ…" /></Field>
+        <Btn variant="primary" className="w-full" disabled={!dc.trim()} onClick={() => loginSpCookie(dc)}>Salvar e conectar</Btn>
       </>)}
+      {error && <p className="mt-4 text-[0.86rem] text-danger text-center">{error}</p>}
+      <p className="text-t3 text-[0.8rem] mt-4 text-center">As músicas tocam pelo YouTube Music ou SoundCloud: o áudio do Spotify é protegido. O login usa um método não oficial e pode parar de funcionar se o Spotify mudar.</p>
     </Modal>
   );
 }

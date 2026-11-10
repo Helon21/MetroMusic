@@ -416,3 +416,15 @@ async fn net_inicio_outras_fontes() {
     }
     println!("INICIO spotify sem login: {:?}", super::other_home("spotify").await.err());
 }
+
+#[tokio::test]
+#[ignore]
+async fn net_spotify_autorizacao_do_dispositivo() {
+    // sem login: só confirma que o Spotify ainda aceita o client id e o escopo do MetroFuse e devolve o código
+    let r = crate::http::CLIENT.post("https://accounts.spotify.com/oauth2/device/authorize").header("User-Agent", "Spotify/126600447 Win32_x86_64/0 (PC laptop)")
+        .form(&[("client_id", "65b708073fc0480ea92a077233ca87bd"), ("scope", "user-read-private,user-library-read")]).send().await.unwrap();
+    let st = r.status();
+    let body = r.text().await.unwrap();
+    println!("SPDEV {st} {}", body.chars().take(300).collect::<String>());
+    assert!(st.is_success() && body.contains("device_code"));
+}

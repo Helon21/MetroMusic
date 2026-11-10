@@ -37,9 +37,15 @@ async function onLoggedIn(info: SpAccountInfo) {
 }
 
 export async function refreshSpStatus() { const st = await engine.spStatus(); if (st) useSp.setState({ hasClientId: st.hasClientId, redirect: st.redirect }); }
-export function loginSp(clientId?: string) {
+export function loginSp() {
   useSp.setState({ status: "waiting", error: null });
-  engine.spLoginStart(clientId).catch((e) => useSp.setState({ status: "idle", error: String(e) }));
+  engine.spLoginStart().catch((e) => useSp.setState({ status: "idle", error: String(e) }));
+}
+/** Método avançado: o usuário cola o cookie `sp_dc` de open.spotify.com. */
+export async function loginSpCookie(spDc: string) {
+  useSp.setState({ status: "waiting", error: null });
+  try { const info = await engine.spLoginCookie(spDc); if (info) await onLoggedIn(info); else useSp.setState({ status: "idle" }); }
+  catch (e) { useSp.setState({ status: "idle", error: String(e) }); }
 }
 export function cancelSpLogin() { engine.spLoginCancel(); useSp.setState({ status: "idle" }); }
 export async function logoutSp() { await engine.spLogout(); setInfo(null); toast("Você saiu do Spotify"); }
