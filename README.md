@@ -111,7 +111,7 @@ O código é aberto e cada pacote da release é assinado com a chave do projeto 
 
 ### Dependências no Linux
 
-O AppImage já traz quase tudo. Para o áudio e a bandeja, o sistema precisa de `alsa` (ou PipeWire com `pipewire-alsa`) e do `libayatana-appindicator`.
+O AppImage é compilado no Ubuntu 24.04, então pede **glibc 2.39 ou mais nova** (Ubuntu 24.04+, Debian 13+, Fedora 40+, Arch e derivados como o CachyOS). Em distribuições mais antigas, compile a partir do código. O AppImage já traz quase tudo. Para o áudio e a bandeja, o sistema precisa de `alsa` (ou PipeWire com `pipewire-alsa`) e do `libayatana-appindicator`.
 
 ---
 

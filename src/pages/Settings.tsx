@@ -13,6 +13,7 @@ import { addFolder, removeFolder, scanLocal } from "../lib/local";
 import { deleteAllDownloads } from "../lib/downloads";
 import { forgetImages } from "../lib/imageCache";
 import { checkUpdates, currentVersion, useUpdate } from "../lib/updater";
+import { usePerf } from "../lib/perf";
 import { applyBackup, createBackup, readBackup } from "../lib/backupIO";
 import { describeNext } from "../lib/schedule";
 import { BrandIcon, BrandTile, isBrand, lyricsBrand, SourceIcon } from "../lib/brands";
@@ -219,6 +220,19 @@ function StorageBars() {
       <div className="text-t3 text-[0.86rem] mt-1.5">{t("Downloads: {n} músicas no computador", { n: downloaded })}</div></div>
   );
 }
+/** O que o app está usando agora para desenhar: placa de vídeo ou software, e se o modo leve está ligado. */
+function PerfStatus() {
+  const t = useT();
+  const { low, reason, gpu } = usePerf();
+  const software = !!gpu && /swiftshader|llvmpipe|softpipe|lavapipe|software|basic render/i.test(gpu);
+  return (
+    <div className="px-4 py-3.5 text-[0.88rem]">
+      <div className="flex items-center gap-2"><span className={cx("size-2.5 rounded-full", low ? "bg-warn" : "bg-ok")} /><span className="font-medium">{low ? t("Modo leve ligado") : t("Efeitos completos")}</span></div>
+      <div className="text-t3 mt-1.5">{gpu ? `${software ? t("Desenhando por software") : t("Placa de vídeo")}: ${gpu}` : t("Placa de vídeo não identificada")}</div>
+      {reason && <div className="text-t3">{t("Motivo")}: {t(reason)}</div>}
+    </div>
+  );
+}
 function Updater() {
   const t = useT();
   const { status, current, version, error } = useUpdate();
@@ -263,7 +277,7 @@ function Custom({ id }: { id: string }) {
   switch (id) {
     case "themeMode": return <ThemeMode />; case "palette": return <PalettePicker />; case "shortcuts": return <ShortcutsList />; case "alarms": return <Alarms />;
     case "providerHealth": return <ProviderHealth />; case "folders": return <Folders />; case "integrations": return <Integrations />; case "discordPreview": return <DiscordPreview />;
-    case "storage": return <StorageBars />; case "updater": return <Updater />; case "changelog": return <Changelog />; case "about": return <About />; case "discordStatus": return <DiscordStatus />; case "ltBlocked": return <LtBlocked />; case "ltLogs": return <LtLogs />;
+    case "perfStatus": return <PerfStatus />; case "storage": return <StorageBars />; case "updater": return <Updater />; case "changelog": return <Changelog />; case "about": return <About />; case "discordStatus": return <DiscordStatus />; case "ltBlocked": return <LtBlocked />; case "ltLogs": return <LtLogs />;
   }
   return null;
 }

@@ -1,5 +1,6 @@
 # Publica uma versão: ao criar uma tag `v*` (ex.: v0.1.0) compila para Linux e Windows, assina os pacotes e anexa
 # tudo à Release do GitHub, junto com o `latest.json` que o app usa para se atualizar sozinho.
+# O Linux compila no Ubuntu 24.04: o WebKit embutido no AppImage vem daí (o do 22.04 não usava a GPU em alguns sistemas).
 name: Release
 
 on:
@@ -31,7 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
           - os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
@@ -51,7 +52,7 @@ jobs:
           workspaces: src-tauri
 
       - name: Dependências do Linux
-        if: matrix.os == 'ubuntu-22.04'
+        if: matrix.os == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libasound2-dev libssl-dev libxdo-dev

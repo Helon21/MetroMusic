@@ -7,14 +7,14 @@ import { getSetting, setSetting, useSettings } from "../store/settings";
 
 export type PerfMode = "auto" | "full" | "low";
 
-export const usePerf = create<{ low: boolean; reason: string }>(() => ({ low: false, reason: "" }));
+export const usePerf = create<{ low: boolean; reason: string; gpu: string | null }>(() => ({ low: false, reason: "", gpu: null }));
 
 /** `true` quando o modo leve está valendo. */
 export const useLowPerf = () => usePerf((s) => s.low);
 export const isLowPerf = () => usePerf.getState().low;
 
-function apply(low: boolean, reason: string) {
-  usePerf.setState({ low, reason });
+function apply(low: boolean, reason: string, gpu: string | null = usePerf.getState().gpu) {
+  usePerf.setState({ low, reason, gpu });
   document.documentElement.dataset.perf = low ? "low" : "full";
 }
 
@@ -61,9 +61,10 @@ function evaluate() {
   if (mode === "full") return apply(false, "escolha do usuário");
   // automático
   const name = gpuRenderer();
-  if (isSoftwareRenderer(name)) return apply(true, `sem GPU (${name})`);
+  usePerf.setState({ gpu: name });
+  if (isSoftwareRenderer(name)) return apply(true, "o renderizador gráfico é por software", name);
   if (hintIsFresh(getSetting("perfHint") as { low: boolean; at: number } | undefined)) { apply(true, "lentidão numa execução anterior"); return; }
-  apply(false, name ? `GPU: ${name}` : "GPU desconhecida");
+  apply(false, name ? "placa de vídeo em uso" : "placa de vídeo não identificada", name);
   startMonitor();
 }
 

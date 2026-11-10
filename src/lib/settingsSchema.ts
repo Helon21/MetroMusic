@@ -66,6 +66,7 @@ export const PAGES: Page[] = [
     ] },
     { title: "Player", items: [
       sel("playerBackground", "Fundo do Tocando agora", "movingBlur", [["solid", "Sólido"], ["gradient", "Gradiente"], ["blur", "Desfoque"], ["movingBlur", "Desfoque em movimento"], ["galaxy", "Galáxia"], ["galaxyBlur", "Galáxia com desfoque"]]),
+      custom("perfStatus"),
       sel("visualPerformance", "Desempenho visual", "auto", [["auto", "Automático (recomendado)"], ["full", "Completo"], ["low", "Leve"]], "Automático liga o modo leve sozinho em PCs sem placa de vídeo ou quando o app fica lento. Leve desliga desfoques, sombras grandes, animações decorativas e vídeos de fundo."),
       sel("playerButtons", "Cor dos botões do player", "default", [["default", "Padrão"], ["primary", "Cor primária"], ["tertiary", "Cor terciária"]]),
       sel("sliderStyle", "Estilo da barra de progresso", "default", [["default", "Padrão"], ["wavy", "Ondulada"], ["squiggly", "Rabiscada"], ["slim", "Fina"]]),

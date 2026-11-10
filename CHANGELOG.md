@@ -2,6 +2,15 @@
 
 Cada versão publicada no GitHub usa o texto da sua seção como "o que mudou" (é o que aparece no aviso de atualização dentro do app).
 
+## 0.1.2
+
+O AppImage do Linux agora usa a placa de vídeo.
+
+### Linux
+- **O AppImage é compilado no Ubuntu 24.04**, com o WebKit 2.52 embutido (antes vinha um WebKit mais antigo que, em alguns sistemas como CachyOS com placa NVIDIA, desenhava tudo pela CPU e deixava a interface lenta). Com o novo, o WebKit inicializa a GPU.
+- Em *Configurações › Aparência › Desempenho visual* agora aparece **qual placa de vídeo o app está usando** (ou "desenhando por software") e se o modo leve está ligado, para conferir na hora.
+- Requisito do pacote: sistemas com glibc 2.39 ou mais novo (Ubuntu 24.04+, Debian 13+, Fedora 40+, Arch e derivados). Em distribuições mais antigas, compile a partir do código.
+
 ## 0.1.1
 
 Correção de desempenho: o app agora roda fluido em qualquer PC, inclusive sem placa de vídeo.

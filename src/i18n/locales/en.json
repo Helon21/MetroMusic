@@ -729,5 +729,16 @@
   "Automático liga o modo leve sozinho em PCs sem placa de vídeo ou quando o app fica lento. Leve desliga desfoques, sombras grandes, animações decorativas e vídeos de fundo.": "Automatic turns light mode on by itself on PCs without a graphics card or when the app gets slow. Light turns off blurs, large shadows, decorative animations and background videos.",
   "Completo": "Full",
   "Desempenho visual": "Visual performance",
-  "Leve": "Light"
+  "Leve": "Light",
+  "Desenhando por software": "Rendering in software",
+  "Efeitos completos": "Full effects",
+  "Modo leve ligado": "Light mode on",
+  "Motivo": "Reason",
+  "Placa de vídeo": "Graphics card",
+  "Placa de vídeo não identificada": "Graphics card not identified",
+  "o renderizador gráfico é por software": "the graphics renderer is software-based",
+  "placa de vídeo em uso": "graphics card in use",
+  "taxa de quadros baixa": "low frame rate",
+  "escolha do usuário": "user choice",
+  "lentidão numa execução anterior": "slowness in a previous run"
 }
