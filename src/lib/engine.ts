@@ -11,6 +11,7 @@ export const backend = isTauri;
 export interface RCollection { kind: "album" | "playlist" | "artist" | "mix"; id: string; title: string; subtitle: string; artwork?: string | null }
 export interface YtAccountInfo { name: string; email?: string | null; handle?: string | null; avatar?: string | null }
 export interface SpStatus { hasClientId: boolean; loggedIn: boolean; redirect: string }
+export interface SpAccountInfo { id: string; name: string; handle?: string | null; avatar?: string | null }
 export interface ScAccountInfo { id: number; name: string; handle?: string | null; avatar?: string | null }
 export interface RItem { track?: ExtInfo; collection?: RCollection }
 export interface RSection { title: string; label?: string | null; layout: "list" | "carousel" | "grid"; items: RItem[]; more?: string | null }
@@ -62,7 +63,7 @@ export const engine = {
   spStatus: () => invoke<SpStatus>("sp_status"),
   spLoginStart: (clientId?: string | null) => invoke("sp_login_start", { clientId: clientId || null }),
   spLoginCancel: () => invoke("sp_login_cancel"),
-  spAccount: () => invoke<ScAccountInfo | null>("sp_account"),
+  spAccount: () => invoke<SpAccountInfo | null>("sp_account"),
   spLogout: () => invoke("sp_logout"),
   spLibrary: (kind: "songs" | "playlists" | "albums" | "artists" | "history") => invoke<RPage>("sp_library", { kind }),
   spPage: (id: string) => invoke<RPage>("sp_page", { id }),

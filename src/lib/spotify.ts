@@ -1,20 +1,20 @@
-// Sessão do Spotify (login oficial PKCE): perfil, curtidas importadas e curtidas devolvidas à conta.
+// Sessão do Spotify (login oficial via WebView + Device Flow): perfil, curtidas importadas e curtidas devolvidas à conta.
 import { create } from "zustand";
 import { getTrack, registerTrack } from "./catalog";
 import { isImportingLikes, setImportingLikes } from "./account";
-import { engine, type ScAccountInfo, type SpStatus } from "./engine";
+import { engine, type SpAccountInfo, type SpStatus } from "./engine";
 import { isTauri, onEvent } from "./native";
 import { useLib } from "../store/library";
 import { getSetting } from "../store/settings";
 import { toast, useUI } from "../store/ui";
 
-interface LoginEvent { ok: boolean; cancelled: boolean; error?: string | null; account?: ScAccountInfo | null }
-interface S { info: ScAccountInfo | null; hasClientId: boolean; redirect: string; status: "idle" | "waiting"; error: string | null; epoch: number }
+interface LoginEvent { ok: boolean; cancelled: boolean; error?: string | null; account?: SpAccountInfo | null }
+interface S { info: SpAccountInfo | null; hasClientId: boolean; redirect: string; status: "idle" | "waiting"; error: string | null; epoch: number }
 const KEY = "metromusic-sp-account-v1";
-const saved = (): ScAccountInfo | null => { try { return JSON.parse(localStorage.getItem(KEY) ?? "null"); } catch { return null; } };
-export const useSp = create<S>(() => ({ info: saved(), hasClientId: false, redirect: "http://127.0.0.1:8899/callback", status: "idle", error: null, epoch: 0 }));
+const saved = (): SpAccountInfo | null => { try { return JSON.parse(localStorage.getItem(KEY) ?? "null"); } catch { return null; } };
+export const useSp = create<S>(() => ({ info: saved(), hasClientId: false, redirect: "https://open.spotify.com", status: "idle", error: null, epoch: 0 }));
 
-function setInfo(info: ScAccountInfo | null) {
+function setInfo(info: SpAccountInfo | null) {
   try { info ? localStorage.setItem(KEY, JSON.stringify(info)) : localStorage.removeItem(KEY); } catch { /* sem armazenamento */ }
   useSp.setState((s) => ({ info, status: "idle", error: null, epoch: s.epoch + 1 }));
   useLib.getState().setAccount("spotify", info ? info.name : null);
@@ -29,7 +29,7 @@ export async function importSpLikes() {
   return ids.length;
 }
 
-async function onLoggedIn(info: ScAccountInfo) {
+async function onLoggedIn(info: SpAccountInfo) {
   setInfo(info);
   useUI.getState().closeDialog();
   toast(`Conectado ao Spotify como ${info.name}`);
@@ -44,8 +44,10 @@ export function loginSp(clientId?: string) {
 export function cancelSpLogin() { engine.spLoginCancel(); useSp.setState({ status: "idle" }); }
 export async function logoutSp() { await engine.spLogout(); setInfo(null); toast("Você saiu do Spotify"); }
 
+let initialized = false;
 export async function initSpotify() {
-  if (!isTauri) return;
+  if (!isTauri || initialized) return;
+  initialized = true;
   await refreshSpStatus();
   await onEvent<LoginEvent>("sp:login", (e) => {
     if (e.ok && e.account) { onLoggedIn(e.account); refreshSpStatus(); }
