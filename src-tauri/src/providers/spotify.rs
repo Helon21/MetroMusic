@@ -24,7 +24,7 @@ const ACCOUNTS: &str = "https://accounts.spotify.com";
 /// Client ID do app desktop oficial do Spotify (extraído do MetroFuse).
 const DEVICE_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
 const DEVICE_AUTH_URL: &str = "https://accounts.spotify.com/oauth2/device/authorize";
-const DEVICE_TOKEN_URL: &str = "https://accounts.spotify.com/oauth2/device/token";
+const DEVICE_TOKEN_URL: &str = "https://accounts.spotify.com/api/token"; // endpoint correto (com sp_dc cookie)
 const DEVICE_SCOPE: &str = "user-read-private user-read-email user-library-read user-library-modify playlist-read-private playlist-read-collaborative user-follow-read user-read-recently-played user-top-read streaming";
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -90,8 +90,8 @@ pub async fn finish(sp_dc: &str) -> Res<crate::providers::spotify::Me> {
 
     // 1) Device Authorization Request
     let auth = device_authorize().await?;
-    // 2) Poll do token enquanto o usuário autoriza no WebView (frontend já logou)
-    let tokens = poll_device_token(&auth.device_code).await?;
+    // 2) Poll do token usando o cookie sp_dc (endpoint /api/token com cookie)
+    let tokens = poll_device_token(&auth.device_code, &sp_dc).await?;
     store_tokens(&sp_dc, &tokens)?;
 
     match me().await {
@@ -118,11 +118,12 @@ async fn device_authorize() -> Res<DeviceAuth> {
     })
 }
 
-async fn poll_device_token(device_code: &str) -> Res<TokenResponse> {
+async fn poll_device_token(device_code: &str, sp_dc: &str) -> Res<TokenResponse> {
     let start = std::time::Instant::now();
     let mut interval = 5u64;
     loop {
         let resp = CLIENT.post(DEVICE_TOKEN_URL)
+            .header("Cookie", format!("sp_dc={sp_dc}"))
             .form(&[("grant_type", "urn:ietf:params:oauth:grant-type:device_code"), ("device_code", device_code), ("client_id", DEVICE_CLIENT_ID)])
             .send().await.map_err(err)?;
         let status = resp.status();
@@ -166,6 +167,7 @@ async fn refresh() -> Res<()> {
     let (sp_dc, rt) = { let s = STATE.read(); (s.sp_dc.clone(), s.refresh_token.clone()) };
     let rt = rt.ok_or("entre na sua conta do Spotify primeiro")?;
     let resp = CLIENT.post(format!("{ACCOUNTS}/api/token"))
+        .header("Cookie", format!("sp_dc={sp_dc}"))
         .form(&[("grant_type", "refresh_token"), ("refresh_token", &rt), ("client_id", DEVICE_CLIENT_ID)])
         .send().await.map_err(err)?;
     let status = resp.status();
