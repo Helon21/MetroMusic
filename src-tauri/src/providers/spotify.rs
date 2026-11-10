@@ -114,8 +114,9 @@ async fn device_authorize() -> Res<DeviceAuth> {
 }
 
 /// Chama /pair/api/resolve com user_code, flow_ctx, csrf_token (extraídos da página de pairing).
+/// CSRF token é opcional - Spotify pode não exigir mais.
 async fn submit_user_code(sp_dc: &str, user_code: &str, verification_uri_complete: &str) -> Res<()> {
-    // 1) Carrega a página de pairing para extrair flow_ctx e csrf_token
+    // 1) Carrega a página de pairing para extrair flow_ctx e csrf_token (opcional)
     let client = CLIENT.clone();
     
     let resp = client.get(verification_uri_complete)
@@ -136,28 +137,35 @@ async fn submit_user_code(sp_dc: &str, user_code: &str, verification_uri_complet
         })
         .ok_or("flow_ctx não encontrado no HTML de pairing")?;
     
-    // Extrai csrf_token do HTML
+    // Extrai csrf_token do HTML (opcional - Spotify pode não exigir mais)
     let csrf_token = html
         .split("csrfToken")
         .nth(1)
         .and_then(|s| s.split('"').nth(2))
         .or_else(|| html.split("csrf_token").nth(1).and_then(|s| s.split('"').nth(2)))
-        .ok_or("csrf_token não encontrado na página de pairing")?;
-
+        .or_else(|| {
+            // Tenta extrair de meta tag
+            html.split("csrf-token").nth(1).and_then(|s| s.split('"').nth(1))
+        });
+    
     // 2) POST para /pair/api/resolve
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     let flow_ctx_with_ts = format!("{}:{}", flow_ctx, ts);
 
-    let resp = client.post("https://accounts.spotify.com/pair/api/resolve")
+    let mut req = client.post("https://accounts.spotify.com/pair/api/resolve")
         .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0")
-        .header("x-csrf-token", csrf_token)
         .header("referer", verification_uri_complete)
         .header("origin", "https://accounts.spotify.com")
         .header("Content-Type", "application/json")
         .header("Cookie", format!("sp_dc={sp_dc}"))
         .json(&serde_json::json!({ "userCode": user_code }))
-        .query(&[("flow_ctx", flow_ctx_with_ts)])
-        .send().await.map_err(err)?;
+        .query(&[("flow_ctx", flow_ctx_with_ts)]);
+    
+    if let Some(csrf) = csrf_token {
+        req = req.header("x-csrf-token", csrf);
+    }
+    
+    let resp = req.send().await.map_err(err)?;
     
     let status = resp.status();
     let text = resp.text().await.map_err(err)?;
