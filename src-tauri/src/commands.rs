@@ -308,9 +308,14 @@ pub async fn sp_login_start(app: AppHandle) -> Res<()> {
     ].map(|s| s.parse::<tauri::Url>().unwrap());
     tauri::async_runtime::spawn(async move {
         let emit = |ev: SpLoginEvent| { let _ = app.emit("sp:login", ev); };
+        let mut attempt = 0u32;
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-            if app.get_webview_window(SP_LABEL).is_none() { return emit(SpLoginEvent { ok: false, cancelled: true, error: None, account: None }); }
+            attempt += 1;
+            if app.get_webview_window(SP_LABEL).is_none() { 
+                eprintln!("[spotify login] janela fechada pelo usuário, attempt={}", attempt);
+                return emit(SpLoginEvent { ok: false, cancelled: true, error: None, account: None }); 
+            }
             let mut sp_dc: Option<String> = None;
             for site in &sites {
                 if let Ok(cookies) = win.cookies_for_url(site.clone()) {
@@ -320,13 +325,22 @@ pub async fn sp_login_start(app: AppHandle) -> Res<()> {
                     }
                 }
             }
+            if let Some(ref sp_dc) = sp_dc {
+                eprintln!("[spotify login] sp_dc capturado (len={}), attempt={}, fechando janela...", sp_dc.len(), attempt);
+            } else if attempt % 10 == 0 {
+                eprintln!("[spotify login] aguardando sp_dc... attempt={}", attempt);
+            }
             let Some(sp_dc) = sp_dc else { continue };
-            #[cfg(debug_assertions)]
-            if std::env::var("MM_LOGIN_DEBUG").is_ok() { eprintln!("[spotify login] sp_dc capturado, fechando janela..."); }
             let _ = win.close();
-            return emit(match providers::spotify::finish(&sp_dc).await {
+            eprintln!("[spotify login] chamando providers::spotify::finish...");
+            let result = providers::spotify::finish(&sp_dc).await;
+            eprintln!("[spotify login] finish result: {:?}", result.is_ok());
+            return emit(match result {
                 Ok(m) => SpLoginEvent { ok: true, cancelled: false, error: None, account: Some(m) },
-                Err(e) => SpLoginEvent { ok: false, cancelled: false, error: Some(e), account: None },
+                Err(e) => {
+                    eprintln!("[spotify login] ERRO no finish: {}", e);
+                    SpLoginEvent { ok: false, cancelled: false, error: Some(e), account: None }
+                },
             });
         }
     });
