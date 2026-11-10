@@ -41,10 +41,16 @@ struct State {
     sp_dc: String,
     access_token: Option<String>,
     expires_at_ms: u64,
+    /// Bloqueio por limite de requisições (ms). Fica no arquivo para sobreviver a reiniciar o app.
+    #[serde(default)]
+    blocked_until_ms: u64,
 }
 
 static STATE: Lazy<RwLock<State>> = Lazy::new(|| RwLock::new(State::default()));
 static FILE: Lazy<RwLock<Option<PathBuf>>> = Lazy::new(|| RwLock::new(None));
+/// Até quando o Spotify pediu para não chamar (ms desde a época). Enquanto isso o app não envia nada:
+/// cada chamada feita durante o bloqueio reinicia a janela de limite e atrasa a liberação.
+static BLOCKED_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static NEXT_DATA: Lazy<Regex> = Lazy::new(|| Regex::new(r#"(?s)<script id="__NEXT_DATA__" type="application/json"[^>]*>(.*?)</script>"#).unwrap());
 
 #[derive(Serialize, Clone)]
@@ -56,7 +62,10 @@ pub fn is_logged_in() -> bool { !STATE.read().sp_dc.is_empty() }
 
 pub fn init(path: PathBuf) {
     *FILE.write() = Some(path.clone());
-    if let Ok(b) = std::fs::read(&path) { if let Ok(s) = serde_json::from_slice::<State>(&b) { *STATE.write() = s; } }
+    if let Ok(b) = std::fs::read(&path) { if let Ok(s) = serde_json::from_slice::<State>(&b) {
+        BLOCKED_UNTIL.store(s.blocked_until_ms, std::sync::atomic::Ordering::Relaxed);
+        *STATE.write() = s;
+    } }
 }
 
 fn save() {
@@ -70,6 +79,7 @@ fn save() {
 }
 
 pub fn logout() {
+    BLOCKED_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
     *STATE.write() = State::default();
     save();
 }
@@ -159,6 +169,7 @@ async fn desktop_token(sp_dc: &str) -> Res<(String, u64)> {
 }
 
 async fn renew() -> Res<()> {
+    check_blocked()?;
     let sp_dc = STATE.read().sp_dc.clone();
     if sp_dc.is_empty() { return Err("entre na sua conta do Spotify primeiro".into()); }
     let (at, exp) = desktop_token(&sp_dc).await?;
@@ -177,7 +188,7 @@ async fn token() -> Res<String> {
 pub async fn finish(sp_dc: &str) -> Res<Me> {
     let sp_dc = sp_dc.trim().trim_start_matches("sp_dc=").trim_end_matches(';').to_string();
     if sp_dc.len() < 20 { return Err("o cookie sp_dc parece inválido (copie o valor do cookie sp_dc de open.spotify.com)".into()); }
-    *STATE.write() = State { sp_dc, access_token: None, expires_at_ms: 0 };
+    *STATE.write() = State { sp_dc, access_token: None, expires_at_ms: 0, blocked_until_ms: 0 };
     match renew().await {
         // o token saiu: a sessão é boa, só o /me falhou (ex.: limite de requisições) → não apaga a sessão
         Ok(()) => match me().await { Ok(m) => { save(); Ok(m) } Err(e) => { if !e.starts_with(RATE_LIMITED) { logout(); } Err(friendly(&e)) } },
@@ -187,7 +198,16 @@ pub async fn finish(sp_dc: &str) -> Res<Me> {
 
 // ───────── API
 
+/// Erro se o Spotify ainda está pedindo pausa (não faz nenhuma chamada nesse caso).
+fn check_blocked() -> Res<()> {
+    let until = BLOCKED_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+    let now = now_ms();
+    if until > now { return Err(format!("{RATE_LIMITED} {}", (until - now + 999) / 1000)); }
+    Ok(())
+}
+
 async fn request(method: reqwest::Method, path: &str, query: &[(&str, String)]) -> Res<Value> {
+    check_blocked()?;
     let url = if path.starts_with("http") { path.to_string() } else { format!("{API}{path}") };
     for attempt in 0..3 {
         let t = token().await?;
@@ -202,6 +222,10 @@ async fn request(method: reqwest::Method, path: &str, query: &[(&str, String)]) 
             // Pausa curta: espera uma vez. Pausa longa: não fica girando, avisa quanto falta.
             let wait = retry_after.unwrap_or(2);
             if wait <= 5 && attempt < 2 { tokio::time::sleep(Duration::from_secs(wait)).await; continue; }
+            let until = now_ms() + (wait + 2) * 1000;
+            BLOCKED_UNTIL.store(until, std::sync::atomic::Ordering::Relaxed);
+            STATE.write().blocked_until_ms = until;
+            save();
             return Err(format!("{RATE_LIMITED} {wait}"));
         }
         // curtir/descurtir respondem 200/204 com corpo vazio: não é erro
