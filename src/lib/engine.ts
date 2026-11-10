@@ -13,13 +13,17 @@ export interface YtAccountInfo { name: string; email?: string | null; handle?: s
 export interface SpStatus { hasClientId: boolean; loggedIn: boolean; redirect: string }
 export interface SpAccountInfo { id: string; name: string; handle?: string | null; avatar?: string | null }
 export interface ScAccountInfo { id: number; name: string; handle?: string | null; avatar?: string | null }
+export interface LocalTrack { path: string; title: string; artists: string[]; album?: string | null; durationMs?: number | null; trackNo?: number | null; cover?: string | null; bitrate?: number | null }
+export interface ScanResult { tracks: LocalTrack[]; unsupported: number; unreadable: number; tooShort: number }
+export interface DownloadDone { path: string; bytes: number; tagWarning?: string | null }
+export interface SourceCandidate { track: ExtInfo; score: number; ms: number }
 export interface RItem { track?: ExtInfo; collection?: RCollection }
 export interface RSection { title: string; label?: string | null; layout: "list" | "carousel" | "grid"; items: RItem[]; more?: string | null }
 export interface RTile { title: string; browseId: string; params?: string | null; color?: string | null }
 export interface RExplore { title: string; sections: RSection[]; groups: { title: string; tiles: RTile[] }[] }
 export interface RChip { title: string; browseId: string; params?: string | null }
 export interface RHome { chips: RChip[]; sections: RSection[]; continuation?: string | null; personalized: boolean }
-export interface RPage { kind: string; id: string; title: string; subtitle: string; description?: string | null; artwork?: string | null; tracks: ExtInfo[]; sections: RSection[]; items: RItem[]; editable?: boolean; audioPlaylistId?: string | null }
+export interface RPage { kind: string; id: string; title: string; subtitle: string; description?: string | null; artwork?: string | null; tracks: ExtInfo[]; sections: RSection[]; items: RItem[]; editable?: boolean; audioPlaylistId?: string | null; continuation?: string | null }
 
 /** Provedores que tocam músicas inteiras, na ordem em que o app tenta achar a mesma faixa (para o Deezer). */
 export function playbackOrder(): string[] {
@@ -41,6 +45,20 @@ export const engine = {
   setVolume: (volume: number) => invoke("audio_set_volume", { volume }),
   setSpeed: (speed: number) => invoke("audio_set_speed", { speed }),
   precache: (tracks: ExtInfo[], count: number) => invoke("audio_precache", { tracks, count, order: playbackOrder() }),
+  /** Resultados válidos da mesma música em cada fonte que toca por inteiro (modal "Escolher fonte de áudio"). */
+  sourceCandidates: (track: ExtInfo) => invoke<SourceCandidate[]>("source_candidates", { track, order: playbackOrder() }),
+  // ───────── Biblioteca local, downloads, imagens e importação
+  localScan: (folders: string[], minSecs: number, preferEmbedded: boolean) => invoke<ScanResult>("local_scan", { folders, minSecs, preferEmbedded }),
+  localIndex: () => invoke<ScanResult | null>("local_index_load"),
+  localWatch: (folders: string[]) => invoke("local_watch", { folders }),
+  localProbe: (paths: string[], preferEmbedded: boolean) => invoke<(LocalTrack | null)[]>("local_probe", { paths, preferEmbedded }),
+  download: (track: ExtInfo, folder: string, writeTags: boolean, embedLyrics: boolean) => invoke<DownloadDone>("download_track", { track, folder, writeTags, embedLyrics, order: playbackOrder() }),
+  downloadDelete: (paths: string[], folder: string) => invoke<number>("download_delete", { paths, folder }),
+  downloadMissing: (paths: string[]) => invoke<string[]>("download_missing", { paths }),
+  imageFetch: (url: string, limitMb: number) => invoke<string>("image_fetch", { url, limitMb }),
+  imageStats: () => invoke<{ bytes: number; files: number }>("image_cache_stats"),
+  imageClear: () => invoke<number>("image_cache_clear"),
+  importMatch: (items: { title: string; artist: string; durationSec?: number }[]) => invoke<(ExtInfo | null)[]>("import_match", { items, order: playbackOrder() }),
   lyrics: (track: ExtInfo, order: string[]) => invoke<unknown>("lyrics_get", { track, order }),
   ytLoginStart: () => invoke("yt_login_start"),
   ytLoginCancel: () => invoke("yt_login_cancel"),
@@ -81,6 +99,8 @@ export const engine = {
   playlistDelete: (provider: string, playlistId: string) => invoke("playlist_delete", { provider, playlistId }),
   librarySave: (provider: string, kind: "album" | "playlist" | "artist", id: string, save: boolean) => invoke("library_save", { provider, kind, id, save }),
   ytHome: (chip?: RChip | null, continuation?: string | null) => invoke<RHome>("yt_home", { chipBrowseId: chip?.browseId, chipParams: chip?.params, continuation }),
+  ytPagePartial: (browseId: string) => invoke<RPage>("yt_page_partial", { browseId }),
+  ytPageMore: (token: string, artwork?: string | null) => invoke<[ExtInfo[], string | null]>("yt_page_more", { token, artwork: artwork ?? null }),
   ytPage: (browseId: string) => invoke<RPage>("yt_page", { browseId }),
   ytRadio: (videoId?: string | null, playlistId?: string | null) => invoke<ExtInfo[]>("yt_radio", { videoId, playlistId }),
   cacheStats: () => invoke<{ bytes: number; entries: number; limit: number; enabled: boolean }>("cache_stats"),

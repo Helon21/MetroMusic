@@ -70,7 +70,7 @@ export async function initSpotify() {
   let prev = new Set(useLib.getState().liked);
   useLib.subscribe((s) => {
     const now = new Set(s.liked);
-    if (!isImportingLikes() && useSp.getState().info && getSetting("ytSync") !== false) {
+    if (!isImportingLikes() && useSp.getState().info && getSetting("spotifyLikes") !== false) {
       const spId = (id: string) => { const t = getTrack(id); return t?.ext?.provider === "spotify" ? t.ext.id : null; };
       for (const id of now) if (!prev.has(id)) { const v = spId(id); if (v) engine.spRate(v, true)?.catch(() => toast("Não foi possível curtir no Spotify")); }
       for (const id of prev) if (!now.has(id)) { const v = spId(id); if (v) engine.spRate(v, false)?.catch(() => toast("Não foi possível remover a curtida no Spotify")); }

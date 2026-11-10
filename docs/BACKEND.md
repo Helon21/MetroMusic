@@ -39,6 +39,21 @@ eventos audio:* (loading, buffering, loaded, playing, paused, position, ended, a
 | `audio.rs` | Decodificação, reamostragem, dois slots, equalizador, normalização, crossfade/gapless, saída | (Media3/ExoPlayer no Android) |
 | `playback.rs` | Une resolver → cache → motor; pré-carrega a próxima faixa | |
 | `commands.rs` | Comandos expostos à interface (inclui as janelas de login) | |
+| `settings.rs` | Configurações em `settings.json` e segredos em `secrets.json` (0600) | `DataStore.kt` |
+| `http.rs` | Cliente HTTP compartilhado; proxy HTTP/SOCKS5 lido das configurações ao abrir | `App.kt` (proxy) |
+| `providers/prefs.rs` | Idioma, país, uso do login ao navegar e qualidade do áudio | `ContentSettings.kt` |
+| `providers/health.rs` | Saúde dos provedores (latência real) | `ProviderHealthChecker` |
+| `discord.rs` | Rich Presence pelo IPC local do Discord | `DiscordRpcManager` |
+| `ai.rs` | Tradução de letras por IA (OpenAI-compatível, Claude, Gemini, DeepL) | `LyricsTranslationHelper` |
+| `files.rs` | Ler/gravar arquivos escolhidos nos diálogos (backup) | `BackupAndRestore` |
+| `local.rs` | Biblioteca local: varredura de pastas, tags (lofty), capas, letra de `.lrc`/tag, vigia (`notify`), fonte `local` | `local/LocalMusicScanner.kt` |
+| `downloads.rs` | Baixar a faixa inteira, nome do arquivo, tags/capa/letra, apagar com segurança | `playback/DownloadUtil.kt`, `AudioTagWriter.kt` |
+| `tagging.rs` | Gravar metadados, capa e letra (ID3v2, MP4, FLAC…) | `playback/AudioTagWriter.kt` |
+| `images.rs` | Cache de imagens em disco com limite | — |
+| `importer.rs` | Procurar as músicas de uma playlist importada nos provedores | `utils/PlaylistExporter.kt` |
+| `awake.rs` | Manter a tela ligada (inibidor do sistema) com o Tocando agora aberto | — |
+| `update.rs` | Verificar versões nas Releases do GitHub (semver, canais estável/beta); abrir link https | `utils/Updater.kt` |
+| `providers/jiosaavn.rs` | Busca, início por idioma e URL assinada por taxa (reprodução desligada: a CDN dá 403) | `jiosaavn/JioSaavnAudioProvider.kt` |
 
 ## Provedores e áudio
 
@@ -144,8 +159,8 @@ Build: o `src-tauri/target` passa de 10 GB; limpe com `cargo clean` ao terminar 
 - Sem downloads offline nem biblioteca local (Baixadas, Arquivos locais, Enviadas).
 - Tidal, Qobuz e JioSaavn não têm backend; Deezer não tem login.
 - Criar, renomear e excluir playlists só existem no YouTube Music; no Spotify ficam de fora, assim como salvar a playlist de outra pessoa.
-- Letras reais só de BetterLyrics e LrcLib; tradução, edição e busca manual de letra são simuladas.
-- Podcasts, Ouvir junto, Reconhecer música, Discord Rich Presence e Cast continuam simulados. O assistente AutoEQ gera valores de exemplo e os perfis do equalizador não são salvos.
+- Letras reais só de BetterLyrics e LrcLib; edição e busca manual de letra são simuladas. A tradução por IA é real (precisa de chave de API).
+- Podcasts, Ouvir junto, Reconhecer música e Cast continuam simulados. O Discord Rich Presence existe, mas precisa de um Application ID seu. O assistente AutoEQ gera valores de exemplo e os perfis do equalizador não são salvos.
 - O Recap em vídeo 9:16 do YouTube não tem API conhecida; a Retrospectiva monta os slides com os dados dos Recaps reais.
 - A raspagem do `client_id` do SoundCloud, os clientes do InnerTube e o fluxo do Spotify podem quebrar quando os serviços mudarem; as constantes vêm do MetroFuse e precisam acompanhá-lo.
 - O botão "próxima" recarrega a faixa em vez de usar a pré-carregada. Só testado no Linux.

@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { AudioLines, ChevronLeft, ChevronRight, CircleUser, Clock, Compass, Gift, History, House, Keyboard, Library, LogOut, Mic, PanelLeft, Plus, Search, Settings, TrendingUp, Users, WifiOff, X, Check, ChevronDown, Import, CloudOff, Wifi } from "lucide-react";
@@ -13,15 +14,16 @@ import { isNativeMac } from "../lib/native";
 import { useYt } from "../lib/account";
 import { WindowControls } from "./WindowControls";
 import { Cover, Eq, IconBtn, Kbd } from "./ui";
+import { openMusicLink } from "../lib/linksOpen";
 
 // ───────── Barra lateral
 function NavItem({ to, icon, label, collapsed, match }: { to: string; icon: React.ReactNode; label: string; collapsed: boolean; match?: string }) {
   const route = useRoute();
   const active = route === to || route.startsWith((match ?? to) + "/") || route === match;
   return (
-    <button onClick={() => nav(to)} title={collapsed ? label : undefined} className={cx("relative w-full h-10 rounded-lg flex items-center gap-3 font-medium transition-colors [&>svg]:size-5 [&>svg]:shrink-0", collapsed ? "justify-center" : "px-3", active ? "text-t1" : "text-t2 hover:text-t1 hover:bg-s2")}>
+    <button onClick={() => nav(to)} title={collapsed ? tr(label) : undefined} className={cx("relative w-full h-10 rounded-lg flex items-center gap-3 font-medium transition-colors [&>svg]:size-5 [&>svg]:shrink-0", collapsed ? "justify-center" : "px-3", active ? "text-t1" : "text-t2 hover:text-t1 hover:bg-s2")}>
       {active && <motion.span layoutId="nav-pill" className="absolute inset-0 rounded-lg bg-s2" transition={{ type: "spring", stiffness: 500, damping: 40 }} />}
-      <span className="relative grid">{icon}</span>{!collapsed && <span className="relative truncate">{label}</span>}
+      <span className="relative grid">{icon}</span>{!collapsed && <span className="relative truncate">{tr(label)}</span>}
       {active && <motion.span layoutId="nav-dot" className="absolute left-0 w-[3px] h-5 rounded-r-full bg-accent" />}
     </button>
   );
@@ -76,20 +78,20 @@ export function Sidebar() {
         <NavItem to="recognize" icon={<Mic />} label="Reconhecer música" collapsed={collapsed} />
       </div>
       <div className={cx("flex items-center mt-5 mb-1.5 shrink-0", collapsed ? "justify-center" : "pl-5 pr-2.5")}>
-        {!collapsed && <span className="flex-1 text-[0.72rem] font-semibold uppercase tracking-wider text-t3">Suas playlists</span>}
+        {!collapsed && <span className="flex-1 text-[0.72rem] font-semibold uppercase tracking-wider text-t3">{tr("Suas playlists")}</span>}
         <IconBtn label="Nova playlist ou importar" size={30} onClick={(e) => openMenuAt(e.currentTarget, [
           { label: "Nova playlist", icon: <Plus />, onClick: () => openDialog("createPlaylist") },
           { label: "Importar playlist…", icon: <Import />, onClick: () => openDialog("import") },
         ])}><Plus /></IconBtn>
       </div>
       {!collapsed && playlists.length + saved.length > 8 && (
-        <div className="px-2.5 mb-1.5 relative"><Search className="absolute left-5 top-1/2 -translate-y-1/2 size-3.5 text-t3" /><input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filtrar playlists" className="w-full h-8 pl-8 pr-2 rounded-lg bg-s2 text-[0.84rem] placeholder:text-t3" /></div>
+        <div className="px-2.5 mb-1.5 relative"><Search className="absolute left-5 top-1/2 -translate-y-1/2 size-3.5 text-t3" /><input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={tr("Filtrar playlists")} className="w-full h-8 pl-8 pr-2 rounded-lg bg-s2 text-[0.84rem] placeholder:text-t3" /></div>
       )}
       <div className="flex-1 min-h-0 overflow-y-auto px-2.5 pb-3 flex flex-col gap-0.5">
         {!filter && autos.map((id) => <SidePlaylist key={id} id={id} collapsed={collapsed} />)}
         {!filter && autos.length > 0 && <div className="h-px bg-line my-1.5 mx-2 shrink-0" />}
         {list.map((id) => <SidePlaylist key={id} id={id} collapsed={collapsed} />)}
-        {!collapsed && <div className="text-t3 text-[0.76rem] px-2 pt-3 leading-snug">Arraste músicas para uma playlist para adicioná-las.</div>}
+        {!collapsed && <div className="text-t3 text-[0.76rem] px-2 pt-3 leading-snug">{tr("Arraste músicas para uma playlist para adicioná-las.")}</div>}
       </div>
     </motion.nav>
   );
@@ -110,17 +112,17 @@ function SearchBox() {
     if (!n) return [] as { label: string; sub: string; go: () => void; cover?: { hue: number; seed: number; artist?: boolean } }[];
     const hit = (s: string) => norm(s).includes(n);
     return [
-      ...artists.filter((a) => hit(a.name)).slice(0, 2).map((a) => ({ label: a.name, sub: "Artista", cover: { hue: a.hue, seed: a.seed, artist: true }, go: () => nav(`artist/${a.id}`) })),
+      ...artists.filter((a) => hit(a.name)).slice(0, 2).map((a) => ({ label: a.name, sub: tr("Artista"), cover: { hue: a.hue, seed: a.seed, artist: true }, go: () => nav(`artist/${a.id}`) })),
       ...albums.filter((a) => hit(a.title)).slice(0, 2).map((a) => ({ label: a.title, sub: `Álbum · ${getArtist(a.artistId)?.name}`, cover: a, go: () => nav(`album/${a.id}`) })),
       ...songs.filter((t) => hit(t.title)).slice(0, 4).map((t) => ({ label: t.title, sub: `Música · ${artistOf(t)}`, cover: t, go: () => usePlayer.getState().play([t.id], 0, "Busca") })),
     ];
   }, [n]);
-  const go = (text: string) => { const s = text.trim(); if (!s) return; if (!paused) useLib.getState().pushSearch(s); setFocus(false); input.current?.blur(); nav(`search/${encodeURIComponent(s)}`); };
+  const go = (text: string) => { const s = text.trim(); if (!s) return; if (openMusicLink(s)) { setFocus(false); input.current?.blur(); setQ(""); return; } if (!paused) useLib.getState().pushSearch(s); setFocus(false); input.current?.blur(); nav(`search/${encodeURIComponent(s)}`); };
   const rows = n ? sugg.length + 1 : history.length;
   return (
     <div className="relative flex-1 max-w-[30rem]" onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setFocus(false)}>
       <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 size-4.5 text-t3 pointer-events-none" />
-      <input ref={input} value={q} onChange={(e) => { setQ(e.target.value); setI(-1); }} onFocus={() => setFocus(true)} placeholder="Buscar músicas, artistas, álbuns…"
+      <input ref={input} value={q} onChange={(e) => { setQ(e.target.value); setI(-1); }} onFocus={() => setFocus(true)} placeholder={tr("Buscar músicas, artistas, álbuns…")}
         onKeyDown={(e) => {
           if (e.key === "ArrowDown") { e.preventDefault(); setI((v) => Math.min(rows - 1, v + 1)); }
           else if (e.key === "ArrowUp") { e.preventDefault(); setI((v) => Math.max(-1, v - 1)); }
@@ -129,16 +131,16 @@ function SearchBox() {
         }}
         className="w-full h-10 pl-10.5 pr-20 rounded-full bg-s2 border border-transparent focus:border-accent/50 focus:bg-s1 placeholder:text-t3 transition-colors" />
       <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1">
-        {q ? <button aria-label="Limpar busca" className="size-6 grid place-items-center rounded-full hover:bg-s3 text-t3" onClick={() => { setQ(""); input.current?.focus(); }}><X className="size-4" /></button> : <span className="flex gap-0.5 opacity-70"><Kbd>Ctrl</Kbd><Kbd>F</Kbd></span>}
+        {q ? <button aria-label={tr("Limpar busca")} className="size-6 grid place-items-center rounded-full hover:bg-s3 text-t3" onClick={() => { setQ(""); input.current?.focus(); }}><X className="size-4" /></button> : <span className="flex gap-0.5 opacity-70"><Kbd>Ctrl</Kbd><Kbd>F</Kbd></span>}
       </div>
       <AnimatePresence>
         {focus && rows > 0 && (
           <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.13 }} style={{ boxShadow: "var(--shadow)" }} className="absolute top-12 inset-x-0 z-40 p-1.5 rounded-2xl bg-s2/95 backdrop-blur-xl">
-            {!n && <div className="px-3 pt-1.5 pb-1 text-[0.72rem] font-semibold uppercase tracking-wider text-t3">Buscas recentes</div>}
+            {!n && <div className="px-3 pt-1.5 pb-1 text-[0.72rem] font-semibold uppercase tracking-wider text-t3">{tr("Buscas recentes")}</div>}
             {!n && history.map((h, k) => (
               <div key={h} tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => go(h)} className={cx("group h-10 px-3 rounded-lg flex items-center gap-3", k === i ? "bg-s3" : "hover:bg-s3")}>
                 <Clock className="size-4 text-t3" /><span className="flex-1 truncate">{h}</span>
-                <button aria-label="Remover do histórico" className="opacity-0 group-hover:opacity-100 text-t3 hover:text-t1" onClick={(e) => { e.stopPropagation(); useLib.getState().removeSearch(h); }}><X className="size-4" /></button>
+                <button aria-label={tr("Remover do histórico")} className="opacity-0 group-hover:opacity-100 text-t3 hover:text-t1" onClick={(e) => { e.stopPropagation(); useLib.getState().removeSearch(h); }}><X className="size-4" /></button>
               </div>
             ))}
             {n && sugg.map((s, k) => (
@@ -170,8 +172,8 @@ export function TopBar() {
       <IconBtn label="Avançar (Alt+→)" size={34} disabled={idx >= len - 1} onClick={fwd}><ChevronRight className="!size-5" /></IconBtn>
       <SearchBox />
       <div data-tauri-drag-region className="flex-1 self-stretch" />
-      {!online && <span className="hidden md:inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-warn/15 text-warn text-[0.78rem] font-semibold"><CloudOff className="size-3.5" />Offline</span>}
-      <button title="Fonte do conteúdo da tela inicial" onClick={(e) => openMenuAt(e.currentTarget, [
+      {!online && <span className="hidden md:inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full bg-warn/15 text-warn text-[0.78rem] font-semibold"><CloudOff className="size-3.5" />{tr("Offline")}</span>}
+      <button title={tr("Fonte do conteúdo da tela inicial")} onClick={(e) => openMenuAt(e.currentTarget, [
         { header: true, label: "Fonte da tela inicial" },
         ...SOURCES.filter((s) => s.home).map((s) => ({ label: s.name, icon: <SourceIcon id={s.id} size={16} />, checked: s.id === source, onClick: () => { setSource(s.id); if (!route.startsWith("home")) nav("home"); } })),
       ])} className="h-9 pl-3 pr-2 rounded-full bg-s2 hover:bg-s3 inline-flex items-center gap-2 text-[0.88rem] font-medium transition-colors">
@@ -181,7 +183,7 @@ export function TopBar() {
       <IconBtn label="Estatísticas" active={route === "stats"} onClick={() => nav("stats")}><TrendingUp /></IconBtn>
       {!together && <IconBtn label="Ouvir junto" active={route === "together"} onClick={() => nav("together")}><Users /></IconBtn>}
       <IconBtn label="Configurações (Ctrl+,)" active={route.startsWith("settings")} onClick={() => nav("settings/appearance")}><Settings /></IconBtn>
-      <button aria-label="Conta" title="Conta" onClick={(e) => openMenuAt(e.currentTarget, [
+      <button aria-label={tr("Conta")} title={tr("Conta")} onClick={(e) => openMenuAt(e.currentTarget, [
         { header: true, label: accounts.youtube ? `Conectado como ${accounts.youtube}` : "Não conectado" },
         { label: "Conta", icon: <CircleUser />, onClick: () => nav("account") },
         { label: "Retrospectiva", icon: <Gift />, onClick: () => nav("wrapped") },

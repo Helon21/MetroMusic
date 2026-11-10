@@ -490,7 +490,148 @@ pub async fn home() -> Res<Vec<Section>> {
 }
 
 /// A busca do Spotify não é usada: o app procura a mesma música no YouTube Music e no SoundCloud.
-pub async fn search(_query: &str, _limit: usize) -> Res<Vec<TrackInfo>> { Ok(vec![]) }
+/// Faixas de uma busca (consulta interna `searchDesktop`, a mesma do site).
+pub async fn search(query: &str, limit: usize) -> Res<Vec<TrackInfo>> {
+    if query.trim().is_empty() || !is_logged_in() { return Ok(vec![]); }
+    let v = gql("searchDesktop", json!({
+        "searchTerm": query.trim(), "offset": 0, "limit": limit.clamp(1, 50), "numberOfTopResults": 5,
+        "includeAudiobooks": false, "includePreReleases": true, "includeLocalConcertsField": false, "includeArtistHasConcertsField": false,
+    })).await?;
+    Ok(search_tracks(&v))
+}
+
+/// Faixas dentro da resposta de `searchDesktop` (o dado de cada faixa pode vir em `item.data` ou `item.item.data`).
+pub(crate) fn search_tracks(v: &Value) -> Vec<TrackInfo> {
+    let items = v.pointer("/data/searchV2/tracksV2/items").or_else(|| v.pointer("/data/searchV2/tracks/items")).and_then(|i| i.as_array());
+    items.map(|a| a.iter().filter_map(|it| {
+        let data = it.pointer("/item/data").or_else(|| it.get("data"))?;
+        to_track(data, None, None)
+    }).collect()).unwrap_or_default()
+}
+
+// ───────── Faixa do Spotify equivalente à que toca (para Canvas e letra)
+
+static MATCHED: Lazy<Mutex<HashMap<String, (u64, Option<String>)>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+const MATCH_TTL_MS: u64 = 6 * 60 * 60 * 1000;
+const MISS_TTL_MS: u64 = 20 * 60 * 1000;
+
+/// Id da faixa no Spotify: a própria, ou a que corresponde com certeza (mesmo critério da reprodução) pela busca.
+pub async fn resolve_id(t: &TrackInfo) -> Res<Option<String>> {
+    if t.provider == "spotify" { return Ok(Some(t.id.clone())); }
+    if !is_logged_in() { return Ok(None); }
+    let key = t.key();
+    if let Some((at, v)) = MATCHED.lock().get(&key) { if now_ms() - at < if v.is_some() { MATCH_TTL_MS } else { MISS_TTL_MS } { return Ok(v.clone()); } }
+    let found = search(&format!("{} {}", t.title, t.artists.join(" ")), 8).await?;
+    let id = super::matcher::best(t, &found).map(|(c, _)| c.id);
+    MATCHED.lock().insert(key, (now_ms(), id.clone()));
+    Ok(id)
+}
+
+// ───────── Letra (color-lyrics, a mesma do player web)
+
+/// Letra da resposta de `color-lyrics`: `(sincronizada, texto)`; sincronizada vira LRC com tempos.
+pub(crate) fn parse_color_lyrics(v: &Value) -> Option<(bool, String)> {
+    let l = v.get("lyrics")?;
+    let lines = l.get("lines")?.as_array()?;
+    let synced = l.get("syncType").and_then(|t| t.as_str()) == Some("LINE_SYNCED");
+    let mut out = vec![];
+    for line in lines {
+        let words = line.get("words").and_then(|w| w.as_str()).unwrap_or("").trim();
+        if synced {
+            let ms: u64 = line.get("startTimeMs").and_then(|m| m.as_str().and_then(|s| s.parse().ok()).or_else(|| m.as_u64()))?;
+            // linhas sem texto (♪ do Spotify) marcam pausas: ficam de fora
+            if words.is_empty() || words == "♪" { continue; }
+            out.push(format!("[{:02}:{:02}.{:02}]{words}", ms / 60000, (ms / 1000) % 60, (ms % 1000) / 10));
+        } else if !words.is_empty() { out.push(words.to_string()); }
+    }
+    (!out.is_empty()).then(|| (synced, out.join("\n")))
+}
+
+pub async fn color_lyrics(track_id: &str) -> Res<Option<(bool, String)>> {
+    check_blocked()?;
+    let tok = token().await?;
+    let sp_dc = STATE.read().sp_dc.clone();
+    let url = format!("https://spclient.wg.spotify.com/color-lyrics/v2/track/{track_id}");
+    let resp = CLIENT.get(&url).query(&[("format", "json"), ("vocalRemoval", "false"), ("market", "from_token")]).bearer_auth(tok)
+        .header("User-Agent", BROWSER_UA).header("Accept", "application/json").header("App-Platform", "WebPlayer")
+        .header("Referer", format!("{WEB}/")).header("Origin", WEB).header("Cookie", format!("sp_dc={sp_dc}"))
+        .timeout(Duration::from_secs(12)).send().await.map_err(err)?;
+    match resp.status().as_u16() {
+        404 => return Ok(None), // sem letra para esta faixa
+        429 => return Err(block_for(resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok()).unwrap_or(30))),
+        200..=299 => {}
+        c => return Err(format!("Spotify HTTP {c} na letra")),
+    }
+    Ok(parse_color_lyrics(&resp.json::<Value>().await.map_err(err)?))
+}
+
+// ───────── Canvas (vídeo em loop da faixa)
+
+fn varint(mut n: u64, out: &mut Vec<u8>) { loop { let b = (n & 0x7f) as u8; n >>= 7; if n == 0 { out.push(b); break; } out.push(b | 0x80); } }
+fn field_len(num: u32, data: &[u8], out: &mut Vec<u8>) { varint(((num as u64) << 3) | 2, out); varint(data.len() as u64, out); out.extend_from_slice(data); }
+
+/// Pedido do Canvas: `{ tracks: [{ uri }] }` em protobuf.
+pub(crate) fn canvaz_request(track_uri: &str) -> Vec<u8> {
+    let mut track = vec![]; field_len(1, track_uri.as_bytes(), &mut track);
+    let mut req = vec![]; field_len(1, &track, &mut req);
+    req
+}
+
+/// Campos de uma mensagem protobuf: `(número, bytes)` para os de tamanho variável (texto e mensagens aninhadas).
+fn proto_fields(mut b: &[u8]) -> Vec<(u32, &[u8])> {
+    let mut out = vec![];
+    fn read_varint(b: &mut &[u8]) -> Option<u64> { let (mut v, mut shift) = (0u64, 0); while let Some((&x, rest)) = b.split_first() { *b = rest; v |= ((x & 0x7f) as u64) << shift; if x & 0x80 == 0 { return Some(v); } shift += 7; if shift > 63 { return None; } } None }
+    while !b.is_empty() {
+        let Some(key) = read_varint(&mut b) else { break };
+        let (num, wire) = ((key >> 3) as u32, key & 7);
+        match wire {
+            0 => { if read_varint(&mut b).is_none() { break; } }
+            1 => { if b.len() < 8 { break; } b = &b[8..]; }
+            5 => { if b.len() < 4 { break; } b = &b[4..]; }
+            2 => { let Some(len) = read_varint(&mut b) else { break }; let len = len as usize; if b.len() < len { break; } out.push((num, &b[..len])); b = &b[len..]; }
+            _ => break,
+        }
+    }
+    out
+}
+
+/// URLs de vídeo na resposta do Canvas (campo 2 de cada canvas; o campo 5 diz de qual faixa é).
+pub(crate) fn parse_canvaz(bytes: &[u8], track_uri: &str) -> Vec<String> {
+    proto_fields(bytes).into_iter().filter(|(n, _)| *n == 1).filter_map(|(_, c)| {
+        let f = proto_fields(c);
+        let of = f.iter().find(|(n, _)| *n == 5).and_then(|(_, v)| std::str::from_utf8(v).ok());
+        if of.map_or(false, |u| !u.eq_ignore_ascii_case(track_uri)) { return None; }
+        let url = f.iter().find(|(n, _)| *n == 2).and_then(|(_, v)| std::str::from_utf8(v).ok())?;
+        usable_canvas_url(url).then(|| url.to_string())
+    }).collect()
+}
+
+/// Só vídeos servidos por https (nunca uma imagem ou outro esquema).
+pub(crate) fn usable_canvas_url(u: &str) -> bool {
+    let l = u.to_ascii_lowercase();
+    let path = l.split('?').next().unwrap_or("");
+    l.starts_with("https://") && !(path.ends_with(".jpg") || path.ends_with(".jpeg") || path.ends_with(".png") || path.ends_with(".gif") || path.ends_with(".webp")) && (path.ends_with(".mp4") || path.ends_with(".m3u8") || path.ends_with(".webm"))
+}
+
+static CANVASES: Lazy<Mutex<HashMap<String, (u64, Option<String>)>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Vídeo do Canvas da faixa (ou `None`). Faixas de outros serviços são casadas com a do Spotify pela busca.
+pub async fn canvas_url(t: &TrackInfo) -> Res<Option<String>> {
+    let Some(id) = resolve_id(t).await? else { return Ok(None) };
+    if let Some((at, v)) = CANVASES.lock().get(&id) { if now_ms() - at < if v.is_some() { MATCH_TTL_MS } else { MISS_TTL_MS } { return Ok(v.clone()); } }
+    check_blocked()?;
+    let uri = format!("spotify:track:{id}");
+    let tok = token().await?;
+    let resp = CLIENT.post("https://spclient.wg.spotify.com/canvaz-cache/v0/canvases").bearer_auth(tok)
+        .header("Accept", "application/protobuf").header("Content-Type", "application/x-www-form-urlencoded").header("Accept-Language", "en")
+        .body(canvaz_request(&uri)).timeout(Duration::from_secs(12)).send().await.map_err(err)?;
+    let st = resp.status().as_u16();
+    if st == 429 { return Err(block_for(resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok()).unwrap_or(30))); }
+    if !(200..300).contains(&st) { CANVASES.lock().insert(id, (now_ms(), None)); return Err(format!("Spotify HTTP {st} no Canvas")); }
+    let url = parse_canvaz(&resp.bytes().await.map_err(err)?, &uri).into_iter().next();
+    CANVASES.lock().insert(id, (now_ms(), url.clone()));
+    Ok(url)
+}
 
 pub async fn rate(track_id: &str, like: bool) -> Res<()> {
     let v = gql(if like { "addToLibrary" } else { "removeFromLibrary" }, json!({ "libraryItemUris": [format!("spotify:track:{track_id}")] })).await?;
@@ -596,6 +737,49 @@ mod tests {
         // episódios e arquivos locais não são faixas
         assert!(to_track(&data, Some("spotify:episode:E1"), None).is_none());
         assert!(to_track(&data, Some("spotify:local:x"), None).is_none());
+    }
+
+    #[test]
+    fn letra_sincronizada_vira_lrc_e_a_comum_vira_texto() {
+        let sync = json!({ "lyrics": { "syncType": "LINE_SYNCED", "lines": [
+            { "startTimeMs": "0", "words": "♪" }, { "startTimeMs": "14070", "words": "I've been tryna call" }, { "startTimeMs": "65250", "words": " Dois " }, { "startTimeMs": "70000", "words": "" } ] } });
+        assert_eq!(parse_color_lyrics(&sync), Some((true, "[00:14.07]I've been tryna call\n[01:05.25]Dois".into())));
+        let plain = json!({ "lyrics": { "syncType": "UNSYNCED", "lines": [{ "words": "um" }, { "words": "" }, { "words": "dois" }] } });
+        assert_eq!(parse_color_lyrics(&plain), Some((false, "um\ndois".into())));
+        assert_eq!(parse_color_lyrics(&json!({ "lyrics": { "syncType": "LINE_SYNCED", "lines": [] } })), None);
+        assert_eq!(parse_color_lyrics(&json!({})), None);
+    }
+
+    #[test]
+    fn canvas_pedido_e_resposta_em_protobuf() {
+        // pedido: campo 1 (faixa) contendo o campo 1 (uri)
+        let req = canvaz_request("spotify:track:ABC");
+        let t = proto_fields(&req);
+        assert_eq!(t.len(), 1);
+        assert_eq!((t[0].0, proto_fields(t[0].1)[0].1), (1, "spotify:track:ABC".as_bytes()));
+        // resposta com dois canvas: um de outra faixa, um da pedida; o de imagem é recusado
+        let canvas = |url: &str, uri: &str| { let mut c = vec![]; field_len(2, url.as_bytes(), &mut c); field_len(5, uri.as_bytes(), &mut c); c };
+        let mut resp = vec![];
+        field_len(1, &canvas("https://canvaz.scdn.co/a.mp4", "spotify:track:OUTRA"), &mut resp);
+        field_len(1, &canvas("https://canvaz.scdn.co/b.jpg", "spotify:track:ABC"), &mut resp);
+        field_len(1, &canvas("https://canvaz.scdn.co/c.mp4?x=1", "spotify:track:abc"), &mut resp);
+        assert_eq!(parse_canvaz(&resp, "spotify:track:ABC"), vec!["https://canvaz.scdn.co/c.mp4?x=1"]);
+        // lixo e mensagem cortada não quebram
+        assert!(parse_canvaz(&[0xff, 0xff, 0xff], "x").is_empty());
+        assert!(parse_canvaz(&resp[..resp.len() / 2], "spotify:track:ABC").len() <= 1);
+        assert!(usable_canvas_url("https://a/b.m3u8") && !usable_canvas_url("http://a/b.mp4") && !usable_canvas_url("https://a/b.png"));
+    }
+
+    #[test]
+    fn faixas_da_busca_nos_dois_formatos_de_envelope() {
+        let data = |name: &str, id: &str| json!({ "uri": format!("spotify:track:{id}"), "name": name, "artists": { "items": [{ "profile": { "name": "Ana" } }] }, "duration": { "totalMilliseconds": 200000 },
+            "albumOfTrack": { "name": "Álbum", "uri": "spotify:album:AL1", "coverArt": { "sources": [{ "url": "https://i/c.jpg" }] } } });
+        let v = json!({ "data": { "searchV2": { "tracksV2": { "items": [{ "item": { "data": data("Um", "T1") } }, { "data": data("Dois", "T2") }, { "item": { "data": { "uri": "spotify:episode:E1", "name": "ep" } } }] } } } });
+        let r = search_tracks(&v);
+        assert_eq!(r.iter().map(|t| (t.id.as_str(), t.title.as_str())).collect::<Vec<_>>(), vec![("T1", "Um"), ("T2", "Dois")]);
+        assert_eq!(r[0].artists, vec!["Ana"]);
+        assert_eq!(r[0].duration_ms, Some(200000));
+        assert!(search_tracks(&json!({})).is_empty());
     }
 
     #[test]

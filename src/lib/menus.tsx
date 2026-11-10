@@ -1,3 +1,4 @@
+import { useLT } from "./lt/session";
 import { CircleUser, Copy, Disc3, Download, FileDown, Heart, HeartOff, Info, ListEnd, ListPlus, ListStart, Pencil, Pin, PinOff, Play, Plus, Radio, RefreshCw, Share2, Shuffle, Trash2, Waypoints, Image, Clock, CloudUpload, Podcast, Users, BookmarkPlus, BookmarkCheck, Import } from "lucide-react";
 import { accountProviderOf, addToAccountPlaylist, loggedIn, providerName, refreshAccountPlaylists, removeFromAccountPlaylist, useAccountPlaylists } from "./accountPlaylists";
 import { artistTracks, getAlbum, getArtist, getTracks, type Album, type Artist, type Playlist, type Track } from "./catalog";
@@ -80,7 +81,7 @@ export function trackMenu(t: Track, ctx: TrackCtx = {}): MenuItem[] {
       : [{ label: "Ir para o artista", icon: <CircleUser />, onClick: () => nav(`artist/${t.artistId}`) }, { label: "Ir para o álbum", icon: <Disc3 />, onClick: () => nav(`album/${t.albumId}`) }]),
     share(t.title, "track", t.id),
     { label: "Escolher fonte de áudio", icon: <Waypoints />, onClick: () => openDialog("source", { id: t.id }) },
-    ...(ctx.inRoom ? [{ label: "Sugerir ao anfitrião", icon: <Users />, onClick: () => toast("Sugestão enviada ao anfitrião!") }] : []),
+    ...(ctx.inRoom || useLT.getState().role === "guest" ? [{ label: "Sugerir ao anfitrião", icon: <Users />, onClick: () => useLT.getState().suggest(t.id) }] : []),
     div,
     { label: "Editar", icon: <Pencil />, onClick: () => openDialog("editSong", { id: t.id }) },
     { label: "Atualizar metadados", icon: <RefreshCw />, onClick: () => toast("Metadados atualizados") },

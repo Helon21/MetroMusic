@@ -10,6 +10,9 @@ import { useSetting } from "../store/settings";
 import { nav, useUI } from "../store/ui";
 import { Cover, Eq, Explicit, IconBtn, SectionTitle, Spinner } from "./ui";
 
+/** Short do YouTube: música do YouTube com até 60 s (a resposta do YouTube Music não tem um marcador próprio). */
+const isShort = (t?: Track) => t?.ext?.provider === "youtube" && !!t.duration && t.duration <= 60;
+
 // ───────── Lista de faixas
 interface ListProps {
   ids: string[]; title?: string; ctx?: TrackCtx; numbered?: boolean; showAlbum?: boolean; showCover?: boolean; showPlays?: boolean;
@@ -19,7 +22,8 @@ interface ListProps {
 export function TrackList({ ids: rawIds, title = "", ctx = {}, numbered, showAlbum = true, showCover = true, showPlays, header = true, onReorder, dateOf, dense, ctxOf }: ListProps) {
   const hideExplicit = useSetting<boolean>("hideExplicit");
   const hideVideo = useSetting<boolean>("hideVideoSongs");
-  const ids = hideExplicit || hideVideo ? rawIds.filter((i) => { const t = getTrack(i); return !(hideExplicit && t?.explicit) && !(hideVideo && t?.video); }) : rawIds;
+  const hideShorts = useSetting<boolean>("hideShorts");
+  const ids = hideExplicit || hideVideo || hideShorts ? rawIds.filter((i) => { const t = getTrack(i); return !(hideExplicit && t?.explicit) && !(hideVideo && t?.video) && !(hideShorts && isShort(t)); }) : rawIds;
   const sel = useUI((s) => s.sel), setSel = useUI((s) => s.setSel), openMenu = useUI((s) => s.openMenu);
   const anchor = useRef<number>(-1);
   const [drop, setDrop] = useState<number | null>(null);

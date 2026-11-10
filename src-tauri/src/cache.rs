@@ -386,5 +386,16 @@ impl Cache {
         }
     }
 
+    /// Entrada para um arquivo que já existe fora do cache (biblioteca local, downloads). Fica fora do mapa, então
+    /// `trim` e `clear` nunca a enxergam: o arquivo do usuário jamais é apagado por aqui.
+    pub fn external_entry(&self, s: &StreamInfo) -> Arc<Entry> {
+        let path = PathBuf::from(&s.source_id);
+        let len = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        Arc::new(Entry {
+            key: format!("{}:{}", s.source, s.source_id), path, meta_path: PathBuf::new(), ext: s.ext.clone(), bitrate: s.bitrate, codec: s.codec.clone(),
+            st: Mutex::new(EntryState { have: len, total: Some(len), complete: true, last_used: now_ms(), ..Default::default() }), cv: Condvar::new(), readers: AtomicUsize::new(0),
+        })
+    }
+
     pub fn get(&self, key: &str) -> Option<Arc<Entry>> { self.entries.lock().get(key).cloned() }
 }

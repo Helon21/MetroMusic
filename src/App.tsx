@@ -1,3 +1,4 @@
+import { resolveLang } from "./i18n";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
 import { CrashScreen, ErrorBoundary } from "./components/Crash";
@@ -94,18 +95,11 @@ function Shell() {
   const reduce = useTheme();
   useClock(); useShortcuts();
   const crash = useUI((s) => s.crash);
-  // Aviso de nova versão, uma vez por versão (equivalente ao diálogo de atualização do MetroFuse).
-  useEffect(() => {
-    const t = setTimeout(() => {
-      if (getSetting("autoUpdateCheck") && getSetting("updateNotifications") && !getSetting("updateToastSeen")) {
-        setSetting("updateToastSeen", true);
-        toast("MetroMusic 0.2.0 está disponível", { label: "Ver", fn: () => openDialog("update") });
-      }
-    }, 7000);
-    return () => clearTimeout(t);
-  }, []);
   const route = useRoute(), idx = useUI((s) => s.idx);
   const galaxy = useSetting<string>("appBackground") === "galaxy";
+  // trocar o idioma refaz a árvore inteira (as peças compartilhadas traduzem ao desenhar)
+  const lang = resolveLang(useSetting<string>("appLanguage"));
+  useEffect(() => { document.documentElement.lang = lang; }, [lang]);
   const main = useRef<HTMLDivElement>(null);
   const prev = useRef(idx);
   // Guarda a rolagem da entrada que está saindo e restaura a da que está entrando.
@@ -124,7 +118,7 @@ function Shell() {
 
   return (
     <MotionConfig reducedMotion={reduce ? "always" : "user"}>
-      <div className={cx("h-full flex flex-col", galaxy && "galaxy")}>
+      <div key={lang} className={cx("h-full flex flex-col", galaxy && "galaxy")}>
         <div className="flex-1 min-h-0 flex">
           <Sidebar />
           <div className="flex-1 min-w-0 flex flex-col relative">

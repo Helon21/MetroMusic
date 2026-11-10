@@ -22,9 +22,9 @@ const BY_KEY: Record<string, LucideIcon> = {
   trackNotifications: Bell, openLinks: Link, globalShortcuts: Command,
   // experimentos
   expMetroLyrics: Music, expSmoothInline: ListEnd, expCoverFade: Film, expGalaxyAdaptive: Orbit, expGalaxyMirrored: Orbit, lyricsHighRefresh: Gauge, expProviderTimeout: Timer,
-  expDeezerFirst: ListStart, expConfirmSkip: Pause, expDiagnostics: Bug, expKeepCacheOnQuality: Database, simulateError: TriangleAlert, simulateCrash: ShieldAlert,
+  expConfirmSkip: Pause, expDiagnostics: Bug, expKeepCacheOnQuality: Database, simulateError: TriangleAlert, simulateCrash: ShieldAlert,
   // player e áudio
-  audioQuality: AudioLines, outputDevice: MonitorSpeaker, exclusiveMode: Lock, normalization: Volume2, loudnessLevel: Gauge, skipSilence: FastForward, skipSilenceInstant: SkipForward,
+  audioQuality: AudioLines, normalization: Volume2, loudnessLevel: Gauge, skipSilence: FastForward, skipSilenceInstant: SkipForward,
   crossfade: Blend, crossfadeDuration: Timer, crossfadeGapless: Disc3, automix: Wand2, automixStyle: Palette, automixBars: Timer, varispeed: Gauge, seekAddUp: FastForward,
   persistentQueue: ListMusic, autoLoadMore: ListPlus, similarContent: Radio, noLoadMoreOnRepeat: Repeat, autoplay: Play, shufflePlaylistFirst: Shuffle, persistentShuffle: Shuffle,
   rememberShuffleRepeat: Repeat1, preventDuplicates: Copy, preload: Download, autoSkipOnError: SkipForward, stopOnProviderError: Ban, sleepDefault: Moon, sleepStopAfterSong: ListEnd,
@@ -55,7 +55,7 @@ const BY_KEY: Record<string, LucideIcon> = {
   clearSongCache: Trash2, maxImageCache: Database, clearImageCache: Trash2,
   backup: Download, restore: Upload, importM3u: FileText, importCsv: FileSpreadsheet, timeTransfer: ArrowLeftRight,
   // sistema
-  autoUpdateCheck: RefreshCw, updateNotifications: Bell, updateChannel: GitBranch,
+  autoUpdateCheck: RefreshCw, updateNotifications: Bell,
 };
 
 const FALLBACK: Record<string, LucideIcon> = { toggle: ToggleRight, select: ListFilter, slider: SlidersHorizontal, text: Settings, action: Plug, link: Folder, order: ListOrdered };

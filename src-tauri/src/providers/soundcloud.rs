@@ -183,7 +183,9 @@ pub(crate) fn parse_playlist(base: &str, text: &str) -> Vec<String> {
     out
 }
 
-fn pick_transcoding(track: &Value) -> Option<Candidate> {
+/// Escolhe a versão do áudio. `quality`: `mp3` (MP3 128), `aac96` (AAC ~96) ou `aac160` (AAC ~160, o padrão).
+/// A preferência manda no formato e na taxa; se a faixa não oferecer aquela, vale a mais próxima.
+fn pick_transcoding(track: &Value, quality: &str) -> Option<Candidate> {
     let list = track.get("media")?.get("transcodings")?.as_array()?;
     let mut out: Vec<Candidate> = list.iter().filter_map(|t| {
         let fmt = t.get("format")?;
@@ -198,8 +200,12 @@ fn pick_transcoding(track: &Value) -> Option<Candidate> {
     }).collect();
     // "audio/mpegurl" é só a lista genérica; o HLS útil é o AAC em MP4 fragmentado.
     out.retain(|c| c.progressive || c.mime.contains("mp4"));
-    // AAC primeiro, depois a maior taxa; empate fica com o progressivo (um download só).
-    out.sort_by_key(|c| (!c.mime.contains("mp4"), std::cmp::Reverse(c.bitrate), !c.progressive));
+    let (want_aac, target) = match quality { "mp3" => (false, 128_000i64), "aac96" => (true, 96_000), _ => (true, 160_000) };
+    // 1º o formato pedido, 2º a taxa mais próxima da pedida (em empate, a maior), 3º o progressivo (um download só).
+    out.sort_by_key(|c| {
+        let aac = c.mime.contains("mp4");
+        (aac != want_aac, (c.bitrate as i64 - target).abs(), std::cmp::Reverse(c.bitrate), !c.progressive)
+    });
     out.into_iter().next()
 }
 
@@ -211,7 +217,7 @@ pub async fn resolve(track: &TrackInfo) -> Res<StreamInfo> {
     if text(&full, "policy").map_or(false, |p| p.eq_ignore_ascii_case("SNIP")) {
         return Err("SoundCloud: faixa disponível só como trecho".into());
     }
-    let cand = pick_transcoding(&full).ok_or_else(|| {
+    let cand = pick_transcoding(&full, &super::prefs::sc_quality()).ok_or_else(|| {
         let offered: Vec<String> = full.get("media").and_then(|m| m.get("transcodings")).and_then(|t| t.as_array()).into_iter().flatten()
             .filter_map(|t| t.get("format").map(|f| format!("{} {}", f["protocol"].as_str().unwrap_or("?"), f["mime_type"].as_str().unwrap_or("?")))).collect();
         format!("SoundCloud: nenhum stream progressivo disponível (oferecidos: {})", offered.join(", "))
@@ -256,9 +262,35 @@ pub fn invalidate(id: &str) {
     STREAMS.lock().remove(id);
 }
 
+/// Esquece todas as URLs guardadas (a qualidade mudou).
+pub fn clear_streams() { STREAMS.lock().clear(); }
+
 #[cfg(test)]
 mod tests {
-    use super::parse_playlist;
+    use super::{parse_playlist, pick_transcoding};
+    use serde_json::json;
+
+    fn faixa() -> serde_json::Value {
+        json!({"media": {"transcodings": [
+            {"url": "u/mp3", "preset": "mp3_1_0", "format": {"protocol": "progressive", "mime_type": "audio/mpeg"}},
+            {"url": "u/aac", "preset": "aac_160k", "format": {"protocol": "hls", "mime_type": "audio/mp4; codecs=\"mp4a.40.2\""}},
+            {"url": "u/mp3hls", "preset": "mp3_1_0", "format": {"protocol": "hls", "mime_type": "audio/mpeg"}},
+            {"url": "u/lista", "preset": "mp3_0_0", "format": {"protocol": "hls", "mime_type": "audio/mpegurl"}},
+        ]}})
+    }
+
+    #[test]
+    fn qualidade_escolhe_o_formato_pedido() {
+        assert_eq!(pick_transcoding(&faixa(), "mp3").unwrap().url, "u/mp3");
+        let aac = pick_transcoding(&faixa(), "aac160").unwrap();
+        assert_eq!((aac.url.as_str(), aac.bitrate), ("u/aac", 160_000));
+        // sem AAC de 96 kbps, o AAC mais próximo é o de 160
+        assert_eq!(pick_transcoding(&faixa(), "aac96").unwrap().url, "u/aac");
+        // sem AAC nenhum, cai no MP3
+        let so_mp3 = json!({"media": {"transcodings": [{"url": "u/mp3", "preset": "mp3_1_0", "format": {"protocol": "progressive", "mime_type": "audio/mpeg"}}]}});
+        assert_eq!(pick_transcoding(&so_mp3, "aac160").unwrap().url, "u/mp3");
+    }
+
     #[test]
     fn playlist_hls_com_init_e_segmentos_relativos() {
         let txt = "#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:9.9,\nseg0.m4s\n#EXTINF:9.9,\nhttps://cdn.x/seg1.m4s\n#EXT-X-ENDLIST\n";

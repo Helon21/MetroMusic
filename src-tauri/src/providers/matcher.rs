@@ -100,6 +100,13 @@ pub fn best(wanted: &TrackInfo, candidates: &[TrackInfo]) -> Option<(TrackInfo, 
     best.map(|(t, s)| (t.clone(), s))
 }
 
+/// Todos os candidatos que valem como a mesma música, do mais confiável ao menos (empate mantém a ordem da busca).
+pub fn ranked(wanted: &TrackInfo, candidates: &[TrackInfo]) -> Vec<(TrackInfo, i32)> {
+    let mut out: Vec<(TrackInfo, i32)> = candidates.iter().filter_map(|c| confidence(wanted, c).map(|s| (c.clone(), s))).collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1)); // estável
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,8 +119,23 @@ mod tests {
     }
     #[test]
     fn descarta_versao_acelerada() {
-        assert!(confidence(&t("Blinding Lights", "The Weeknd", 200), &t("Blinding Lights (Sped Up)", "The Weeknd", 120)).is_some() || true);
+        // a versão acelerada (duração muito diferente) não conta como a mesma faixa
+        assert!(confidence(&t("Blinding Lights", "The Weeknd", 200), &t("Blinding Lights (Sped Up)", "The Weeknd", 120)).is_none());
         assert!(confidence(&t("Blinding Lights", "The Weeknd", 200), &t("Blinding Lights", "Outro Artista", 200)).is_none());
+    }
+    #[test]
+    fn ranking_deixa_so_os_validos_do_melhor_ao_pior() {
+        let w = t("Blinding Lights", "The Weeknd", 200);
+        let cands = vec![
+            t("Blinding Lights (Remix)", "The Weeknd", 201), // outra versão: fora
+            t("Outra música", "Outro", 200),                 // outra música: fora
+            t("Blinding Lights", "Cover Band", 200),         // outro artista: fora
+            t("Blinding Lights (Official Audio)", "The Weeknd", 200),
+            t("Blinding Lights", "The Weeknd", 202),
+        ];
+        let r = ranked(&w, &cands);
+        assert_eq!(r.iter().map(|(c, _)| c.title.as_str()).collect::<Vec<_>>(), vec!["Blinding Lights (Official Audio)", "Blinding Lights"]);
+        assert!(r.iter().all(|(_, s)| *s == 400));
     }
     #[test]
     fn descarta_duracao_muito_diferente() {

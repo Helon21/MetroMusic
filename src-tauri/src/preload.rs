@@ -72,6 +72,7 @@ impl Preloader {
     async fn job(self: Arc<Self>, key: String, track: TrackInfo, distance: usize, order: Vec<String>) {
         let result = async {
             let _permit = self.sem.acquire().await.map_err(|e| e.to_string())?; // uma faixa por vez
+            if track.provider == "local" { return Ok(()); } // já está no disco
             let stream = providers::resolve(&track, &order).await?;
             let entry = self.cache.entry_for(&stream);
             let want = target_bytes(distance, stream.bitrate, stream.content_length);

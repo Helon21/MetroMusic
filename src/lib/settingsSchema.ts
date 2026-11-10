@@ -2,7 +2,8 @@
 // pages/Settings.tsx; os padrões alimentam store/settings.ts.
 
 type Opt = [value: string, label: string];
-export type Item =
+/** `soon`: o item ainda não tem implementação; aparece desativado com o selo "Em breve". */
+export type Item = (
   | { t: "toggle"; k: string; label: string; desc?: string; def: boolean; dep?: string }
   | { t: "select"; k: string; label: string; desc?: string; def: string; options: Opt[]; dep?: string }
   | { t: "slider"; k: string; label: string; desc?: string; def: number; min: number; max: number; step: number; unit?: string; dep?: string }
@@ -11,9 +12,10 @@ export type Item =
   | { t: "action"; label: string; desc?: string; button: string; action: string; danger?: boolean }
   | { t: "link"; label: string; desc?: string; to: string }
   | { t: "note"; text: string; tone?: "info" | "warn" }
-  | { t: "custom"; id: string };
+  | { t: "custom"; id: string }
+) & { soon?: boolean };
 export interface Section { title?: string; items: Item[] }
-export interface Page { id: string; title: string; desc: string; group: string; sections: Section[]; parent?: string }
+export interface Page { id: string; title: string; desc: string; group: string; sections: Section[]; parent?: string; /** Motivo pelo qual a página inteira está indisponível; os controles ficam desativados. */ unavailable?: string }
 
 const tg = (k: string, label: string, def: boolean, desc?: string, dep?: string): Item => ({ t: "toggle", k, label, def, desc, dep });
 const sel = (k: string, label: string, def: string, options: Opt[], desc?: string, dep?: string): Item => ({ t: "select", k, label, def, options, desc, dep });
@@ -21,6 +23,8 @@ const sl = (k: string, label: string, def: number, min: number, max: number, ste
 const tx = (k: string, label: string, placeholder = "", desc?: string, extra: Partial<Extract<Item, { t: "text" }>> = {}): Item => ({ t: "text", k, label, def: "", placeholder, desc, ...extra });
 const act = (label: string, button: string, action: string, desc?: string, danger?: boolean): Item => ({ t: "action", label, button, action, desc, danger });
 const note = (text: string, tone: "info" | "warn" = "info"): Item => ({ t: "note", text, tone });
+/** Marca itens (ou chaves) ainda não implementados. */
+export const soon = (...items: Item[]): Item[] => items.map((i) => ({ ...i, soon: true }));
 const custom = (id: string): Item => ({ t: "custom", id });
 const link = (label: string, to: string, desc?: string): Item => ({ t: "link", label, to, desc });
 
@@ -32,6 +36,11 @@ export const PALETTES: [string, string, number, number][] = [
   ["green", "Verde", 150, 1], ["light_green", "Verde-claro", 135, 1], ["lime", "Lima", 120, 1], ["yellow", "Amarelo", 100, 1], ["amber", "Âmbar", 80, 1],
   ["orange", "Laranja", 60, 1], ["deep_orange", "Laranja-escuro", 40, 1], ["brown", "Marrom", 55, 0.4], ["grey", "Cinza", 260, 0], ["blue_grey", "Cinza-azulado", 240, 0.3],
 ];
+/** Serviços cujo áudio completo é protegido: sem suporte por decisão do projeto (ver docs/BACKEND.md). */
+export const UNAVAILABLE_PROVIDERS = ["deezer", "tidal", "qobuz"];
+const PROTECTED = "O áudio completo deste serviço é protegido e o MetroMusic ainda não tem suporte a ele. Os controles abaixo estão desativados e não têm efeito.";
+/** Idiomas da interface: para acrescentar um, crie src/i18n/locales/<código>.json e inclua-o aqui. */
+export const APP_LANGS: Opt[] = [["system", "Padrão do sistema"], ["pt-BR", "Português (Brasil)"], ["en", "English"]];
 const LANGS: Opt[] = [["system", "Padrão do sistema"], ["pt-BR", "Português (Brasil)"], ["en", "English"], ["es", "Español"], ["fr", "Français"], ["de", "Deutsch"], ["ja", "日本語"]];
 const ROMAN = ["Japonês", "Coreano", "Chinês", "Hindi", "Punjabi", "Russo", "Ucraniano", "Bielorrusso", "Quirguiz", "Sérvio", "Búlgaro", "Macedônio"];
 
@@ -63,7 +72,7 @@ export const PAGES: Page[] = [
       tg("hidePlayerThumbnail", "Esconder a capa no player", false, "Mostra o logo do app no lugar da capa"),
       tg("legacyQualityLabel", "Qualidade abaixo dos controles", false, "Mostra o formato de áudio sob o botão de tocar em vez do selo no topo"),
       tg("liveBitrate", "Bitrate ao vivo", true, "Atualiza o rótulo de bitrate em áudio de taxa variável"),
-      tg("animatedCovers", "Capas animadas (Canvas)", true, "Usa vídeos em loop do Spotify Canvas, Apple Music e TIDAL quando existirem"),
+      tg("animatedCovers", "Capas animadas (Canvas)", true, "Mostra o vídeo em loop do Spotify Canvas sobre a capa quando a faixa tiver um (precisa da conta do Spotify)"),
       sel("miniPlayerBackground", "Fundo da barra do player", "tinted", [["tinted", "Tingido pela capa"], ["theme", "Cor do tema"], ["transparent", "Translúcido"]]),
     ] },
     { title: "Letras", items: [
@@ -93,7 +102,7 @@ export const PAGES: Page[] = [
       tg("mediaKeys", "Teclas de mídia", true, "Tocar/pausar, próxima e anterior pelo teclado ou fone. Com os controles de mídia do sistema ligados, é o próprio sistema que entrega as teclas"),
       tg("systemMedia", "Controles de mídia do sistema", true, "MPRIS no Linux, Now Playing no macOS, SMTC no Windows"),
       tg("trackNotifications", "Notificar ao trocar de faixa", false),
-      tg("openLinks", "Abrir links de música compatíveis", true, "Links do YouTube Music, Spotify, TIDAL e Deezer abrem no MetroMusic"),
+      tg("openLinks", "Abrir links de música compatíveis", true, "Cole um link do YouTube Music ou do Spotify na busca para abrir no MetroMusic"),
       tg("globalShortcuts", "Atalhos globais", false, "Funcionam mesmo com a janela sem foco"),
     ] },
     { title: "Atalhos de teclado", items: [custom("shortcuts")] },
@@ -104,13 +113,12 @@ export const PAGES: Page[] = [
       tg("expMetroLyrics", "Letras MetroMusic", true, "Renderizador próprio com movimento por palavra, brilho, desfoque e pontos de pausa musical"),
       tg("expSmoothInline", "Linha de letra suave sob a capa", true, "Mostra só a linha atual, com até três linhas e brilho temporizado"),
       tg("expCoverFade", "Dissolver a capa animada no fundo", false, "Usa a arte animada alta como pano de fundo do player"),
-      tg("expGalaxyAdaptive", "Transparência adaptativa na galáxia", false),
+      tg("expGalaxyAdaptive", "Transparência adaptativa na galáxia", false, "Capa clara deixa as estrelas mais discretas; capa escura, mais visíveis"),
       tg("expGalaxyMirrored", "Cores espelhadas na galáxia", false, "Tinge o desfoque com várias cores da capa mantendo o fundo escuro"),
-      tg("lyricsHighRefresh", "Letras a 120 fps", false, "Sem efeito em telas de 60 Hz"),
+      tg("lyricsHighRefresh", "Letras a 120 fps", false, "Em telas de taxa alta, anima a letra na taxa da tela; desligado limita a 60 quadros por segundo"),
     ] },
     { title: "Confiabilidade da reprodução", items: [
       tg("expProviderTimeout", "Limitar tentativas por provedor", true, "Desiste de um provedor após 20 s e passa para o próximo"),
-      tg("expDeezerFirst", "Preferir Deezer na reprodução automática", false, "Não altera a ordem salva dos provedores"),
       tg("expConfirmSkip", "Perguntar antes de pular após falha", false, "Quando todas as fontes falham, para e deixa você tentar de novo ou pular"),
       tg("expDiagnostics", "Diagnóstico detalhado de reprodução", false, "Registra ordem, duração e resultado de cada tentativa no log"),
       tg("expKeepCacheOnQuality", "Preferir cache após trocar a qualidade", true),
@@ -123,8 +131,6 @@ export const PAGES: Page[] = [
   { id: "player", title: "Player e áudio", desc: "Qualidade, transições, fila e timer", group: "Player e conteúdo", sections: [
     { title: "Áudio", items: [
       sel("audioQuality", "Qualidade do áudio", "max", [["auto", "Automática"], ["low", "Baixa"], ["high", "Alta"], ["max", "Máxima possível"]]),
-      sel("outputDevice", "Dispositivo de saída", "default", [["default", "Padrão do sistema"], ["speakers", "Alto-falantes"], ["headphones", "Fones (USB DAC)"], ["bt", "Bluetooth"]]),
-      tg("exclusiveMode", "Modo exclusivo (bit-perfect)", false, "Entrega o áudio sem remixagem do sistema quando o dispositivo permitir"),
       tg("normalization", "Normalização de volume", true),
       sel("loudnessLevel", "Nível de loudness", "-14", [["-7", "Agressivo (−7 dB)"], ["-11", "Alto (−11 dB)"], ["-14", "Equilibrado (−14 dB)"], ["-19", "Suave (−19 dB)"]], undefined, "normalization"),
       tg("skipSilence", "Pular silêncio", false, "Avança rápido por trechos silenciosos"),
@@ -164,7 +170,7 @@ export const PAGES: Page[] = [
       tg("sleepStopAfterSong", "Esperar a música atual terminar", true),
       tg("sleepFadeOut", "Diminuir o volume no último minuto", true),
       tg("sleepAuto", "Timer de sono automático", false, "Inicia sozinho num horário definido"),
-      sel("sleepRepeat", "Repetir", "daily", [["daily", "Todos os dias"], ["weekdays", "Segunda a sexta"], ["weekends", "Sábado e domingo"], ["custom", "Personalizado"]], undefined, "sleepAuto"),
+      sel("sleepRepeat", "Repetir", "daily", [["daily", "Todos os dias"], ["weekdays", "Segunda a sexta"], ["weekends", "Sábado e domingo"]], undefined, "sleepAuto"),
       tx("sleepStart", "Início", "23:00", undefined, { dep: "sleepAuto", def: "23:00" }),
     ] },
     { title: "Alarme", items: [custom("alarms")] },
@@ -181,7 +187,7 @@ export const PAGES: Page[] = [
   ] },
   { id: "content", title: "Conteúdo", desc: "Idioma, filtros, início e letras", group: "Player e conteúdo", sections: [
     { title: "Geral", items: [
-      sel("appLanguage", "Idioma do app", "pt-BR", LANGS),
+      sel("appLanguage", "Idioma do app", "system", APP_LANGS, "Mudar o idioma recarrega os textos na hora"),
       sel("contentLanguage", "Idioma do conteúdo", "system", LANGS),
       sel("contentCountry", "País do conteúdo", "BR", [["system", "Padrão do sistema"], ["BR", "Brasil"], ["US", "Estados Unidos"], ["PT", "Portugal"], ["GB", "Reino Unido"], ["JP", "Japão"], ["DE", "Alemanha"]]),
       tg("hideExplicit", "Esconder conteúdo explícito", false),
@@ -255,31 +261,35 @@ export const PAGES: Page[] = [
       sl("minDuration", "Ignorar arquivos menores que", 30, 0, 120, 5, "s"),
       tg("readEmbeddedLyrics", "Ler letras embutidas e arquivos .lrc", true),
       tg("preferEmbeddedArt", "Preferir a capa embutida no arquivo", true),
-      act("Varrer agora", "Varrer", "scanLocal", "Formatos: FLAC, MP3, M4A, OGG, Opus, WAV, AIFF"),
+      act("Varrer agora", "Varrer", "scanLocal", "Formatos: FLAC, MP3, M4A, AAC, OGG, WAV"),
     ] },
   ] },
 
   // ───────── Integrações
   { id: "integrations", title: "Integrações", desc: "Contas e serviços conectados", group: "Contas", sections: [{ items: [custom("integrations")] }] },
   { id: "discord", parent: "integrations", title: "Discord", desc: "Rich Presence", group: "Contas", sections: [
-    { items: [custom("discordPreview"), custom("login:discord")] },
+    { items: [custom("discordPreview"), custom("discordStatus"), note("Não precisa entrar nem configurar nada: o MetroMusic fala com o Discord aberto neste computador. Funciona com o Discord de desktop, não com o do navegador.")] },
     { title: "Presença", items: [
       tg("discordRpc", "Ativar Rich Presence", true),
-      sel("discordStatus", "Status", "online", [["online", "Disponível"], ["idle", "Ausente"], ["dnd", "Não perturbe"]]),
       sel("discordActivity", "Tipo de atividade", "listening", [["playing", "Jogando"], ["listening", "Ouvindo"], ["watching", "Assistindo"], ["competing", "Competindo"]]),
       tg("discordUseDetails", "Destacar o título da música", true, "Mostra o título em destaque em vez do artista"),
       tg("discordShowProvider", "Mostrar o provedor de áudio", false),
       tg("discordPlaybackDetails", "Mostrar detalhes de reprodução", false, "Bitrate e taxa de amostragem"),
-      tg("discordPreferSpotify", "Preferir a presença do Spotify", false, "Esconde a presença do MetroMusic quando o histórico do Spotify controla a música atual"),
     ] },
     { title: "Avançado", items: [
       tg("discordAdvanced", "Modo avançado", false),
+      tx("discordAppId", "ID de outro aplicativo (opcional)", "Vazio usa o do MetroMusic", "Só para quem registrou um aplicativo próprio no Discord", { dep: "discordAdvanced" }),
       tx("discordName", "Nome da atividade", "MetroMusic", "Vazio usa o padrão", { dep: "discordAdvanced" }),
-      tx("discordBtn1", "Botão 1", "Ouvir no YouTube Music", "Variáveis: {song_name}, {artist_name}, {album_name}", { dep: "discordAdvanced" }),
-      tx("discordBtn2", "Botão 2", "Conhecer o MetroMusic", undefined, { dep: "discordAdvanced" }),
+      tx("discordBtn1", "Botão 1", "Ouvir no YouTube Music", "Variáveis: {song_name}, {artist_name}, {album_name}. O link é o da faixa no serviço de origem", { dep: "discordAdvanced" }),
+      tx("discordBtn2", "Botão 2", "Conhecer o MetroMusic", "Só aparece se a URL do botão 2 também estiver preenchida", { dep: "discordAdvanced" }),
+      tx("discordBtn2Url", "URL do botão 2", "https://…", "Precisa começar com https://", { dep: "discordAdvanced" }),
+    ] },
+    { title: "Em breve", items: soon(
+      sel("discordStatus", "Status", "online", [["online", "Disponível"], ["idle", "Ausente"], ["dnd", "Não perturbe"]], "O Rich Presence local não controla o status da conta"),
+      tg("discordPreferSpotify", "Preferir a presença do Spotify", false, "Esconde a presença do MetroMusic quando o histórico do Spotify controla a música atual"),
       tg("discordCanvas", "Arte animada", false, "Usa a capa animada no Discord quando houver"),
       sel("discordCanvasQuality", "Qualidade da arte animada", "normal", [["low", "Baixa — 448 px, 15 fps, 6 s"], ["normal", "Normal — 448 px, 20 fps, 10 s"], ["high", "Alta — 512 px, 25 fps, 15 s"]], undefined, "discordCanvas"),
-    ] },
+    ) },
   ] },
   { id: "lastfm", parent: "integrations", title: "Last.fm", desc: "Scrobbling", group: "Contas", sections: [
     { items: [custom("login:lastfm")] },
@@ -302,11 +312,11 @@ export const PAGES: Page[] = [
     { title: "Sincronização", items: [
       tg("spotifyHistory", "Sincronizar histórico de escuta", false, "Experimental: associa o que você toca às faixas do Spotify"),
       tg("spotifyHistoryGlobal", "Usar o histórico globalmente", false, "Também associa reprodução de outras fontes", "spotifyHistory"),
-      tg("spotifyLikes", "Sincronizar curtidas", false, "Adiciona e remove das suas Músicas Curtidas do Spotify"),
+      tg("spotifyLikes", "Sincronizar curtidas", true, "Adiciona e remove das suas Músicas Curtidas do Spotify"),
       tg("spotifyLyrics", "Letras do Spotify", true),
     ] },
   ] },
-  { id: "tidal", parent: "integrations", title: "TIDAL", desc: "Áudio lossless e capas", group: "Contas", sections: [
+  { id: "tidal", parent: "integrations", unavailable: PROTECTED, title: "TIDAL", desc: "Áudio lossless e capas", group: "Contas", sections: [
     { items: [custom("login:tidal")] },
     { title: "Reprodução", items: [
       sel("tidalQuality", "Qualidade", "hires", [["aac", "AAC 320 kbps"], ["flac", "FLAC / 16-bit"], ["hires", "Hi-Res / 24-bit"]]),
@@ -315,13 +325,13 @@ export const PAGES: Page[] = [
       tx("tidalEndpoints", "Endpoints do resolvedor", "https://exemplo.com", "Uma URL por linha, tentadas em ordem", { multiline: true }),
     ] },
   ] },
-  { id: "qobuz", parent: "integrations", title: "Qobuz", desc: "Áudio Hi-Res", group: "Contas", sections: [
+  { id: "qobuz", parent: "integrations", unavailable: PROTECTED, title: "Qobuz", desc: "Áudio Hi-Res", group: "Contas", sections: [
     { items: [
       tx("qobuzCountry", "País", "BR", "Código de 2 letras usado nas requisições (ex.: US, FR, GB)"),
       tx("qobuzInstances", "Instâncias personalizadas", "https://qobuz.exemplo.com", "Uma URL por linha, tentadas em ordem", { multiline: true }),
     ] },
   ] },
-  { id: "deezer", parent: "integrations", title: "Deezer", desc: "Reprodução principal e letras", group: "Contas", sections: [
+  { id: "deezer", parent: "integrations", unavailable: PROTECTED, title: "Deezer", desc: "Reprodução principal e letras", group: "Contas", sections: [
     { items: [custom("login:deezer")] },
     { title: "Reprodução", items: [
       sel("deezerQuality", "Qualidade", "flac", [["flac", "FLAC"], ["320", "MP3 320 kbps"], ["128", "MP3 128 kbps"]]),
@@ -347,9 +357,9 @@ export const PAGES: Page[] = [
   ] },
   { id: "together_settings", parent: "integrations", title: "Ouvir junto", desc: "Servidor, nome e aprovações", group: "Contas", sections: [
     { title: "Conexão", items: [
-      sel("ltServer", "Servidor", "main", [["main", "Principal (América do Sul)"], ["eu", "Europa"], ["us", "América do Norte"], ["custom", "Personalizado"]]),
+      sel("ltServer", "Servidor", "meowery", [["meowery", "The Meowery (Polônia)"], ["custom", "Personalizado"]], "O mesmo servidor do MetroFuse e do Metrolist: as salas são compatíveis"),
       tx("ltCustomServer", "URL do servidor", "wss://…"),
-      tx("ltUsername", "Nome de usuário", "Como os outros veem você", undefined, { def: "cadu" }),
+      tx("ltUsername", "Nome de usuário", "Como os outros veem você", undefined, { def: "Ouvinte" }),
     ] },
     { title: "Sala", items: [
       tg("ltAutoJoin", "Aprovar entradas automaticamente", false),
@@ -403,13 +413,33 @@ export const PAGES: Page[] = [
     { items: [
       custom("updater"),
       tg("autoUpdateCheck", "Procurar atualizações automaticamente", true),
-      tg("updateNotifications", "Notificar novas versões", true),
-      sel("updateChannel", "Canal", "stable", [["stable", "Estável"], ["beta", "Beta"]]),
+      tg("updateNotifications", "Mostrar o aviso de nova versão", true, "A verificação manual continua disponível"),
     ] },
     { title: "Novidades", items: [custom("changelog")] },
   ] },
   { id: "about", title: "Sobre", desc: "Versão, créditos e licença", group: "Sistema", sections: [{ items: [custom("about")] }] },
 ];
+
+/**
+ * Itens que ainda não têm implementação: aparecem desativados com o selo "Em breve".
+ * Chave do controle (`k`), id da ação (`action`) ou id do bloco personalizado (`custom`). Ao implementar um, tire-o daqui.
+ * `node scripts/i18n-extract.mjs --unused` (ou o varredor de chaves) mostra o que ainda não é lido por nada.
+ */
+export const NOT_IMPLEMENTED = [
+  // aparência / experimentos
+  "artistMotion",
+  // player
+  "skipSilence", "skipSilenceInstant", "automix", "automixStyle", "automixBars",
+  // armazenamento
+  "downloadQuality",
+  // integrações
+  "canvasPriority", "canvasDownload", "spotifyHistory", "spotifyHistoryGlobal",
+  "jioQuality", "jioLanguage",
+];
+for (const p of PAGES) for (const sec of p.sections) for (const it of sec.items) {
+  const id = "k" in it ? it.k : it.t === "action" ? it.action : it.t === "custom" ? it.id : "";
+  if (id && NOT_IMPLEMENTED.includes(id)) it.soon = true;
+}
 
 /** Equalizador (a tela própria edita estes valores; não aparecem na lista de configurações). */
 const EQ_DEFAULTS = { eqOn: true, eqPreamp: 0, eq31: 0, eq62: 0, eq125: 0, eq250: 0, eq500: 0, eq1k: 0, eq2k: 0, eq4k: 0, eq8k: 0, eq16k: 0 };

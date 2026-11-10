@@ -24,18 +24,46 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPDATA/covers/**",
+          "$APPLOCALDATA/covers/**",
+          "$APPDATA/images/**",
+          "$APPLOCALDATA/images/**"
+        ]
+      }
     }
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "appimage",
+      "deb",
+      "nsis"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true,
+    "category": "Music",
+    "shortDescription": "Player de música desktop com várias fontes, letras sincronizadas e Discord",
+    "longDescription": "MetroMusic reúne YouTube Music, SoundCloud e Spotify em um player de desktop feito com Tauri, Rust e React."
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA3M0Y0ODgxMjlCMjZCNkMKUldSc2E3SXBnVWcvQnk5bmRQTkw5UVovMVU3Mk9LaXdWVDYrL0x4T2tnTzlHbWFoYjlUMEZWT3YK",
+      "endpoints": [
+        "https://github.com/caduHD4/MetroMusic/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "quiet"
+      }
+    }
   }
 }

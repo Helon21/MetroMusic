@@ -1,3 +1,5 @@
+import { useCanvas } from "../lib/canvas";
+import { useCoverTone } from "../lib/coverTone";
 import { useRef, useState } from "react";
 import { AnimatePresence, motion, Reorder } from "motion/react";
 import { AudioLines, Cast, ChevronDown, Ellipsis, Gauge, GripVertical, Heart, Info, ListMusic, ListPlus, Maximize2, MicVocal, Minimize2, Moon, Pause, PictureInPicture2, Play, Repeat, Repeat1, RotateCcw, Share2, Shuffle, SkipBack, SkipForward, SlidersHorizontal, Trash2, TriangleAlert, Volume1, Volume2, VolumeX, Waypoints, X, Copy } from "lucide-react";
@@ -313,7 +315,14 @@ function DetailsPanel({ t }: { t: Track }) {
 // ───────── Tocando agora (tela cheia)
 function Backdrop({ t }: { t: Track }) {
   const mode = useSetting<string>("playerBackground");
+  const fade = useSetting<boolean>("expCoverFade"), canvasBg = useCanvas(fade ? t : null);
+  const adaptive = useSetting<boolean>("expGalaxyAdaptive"), mirrored = useSetting<boolean>("expGalaxyMirrored");
+  const blurry = mode === "blur" || mode === "movingBlur" || mode === "galaxyBlur";
+  // as cores e o brilho da capa só são lidos se alguma das duas opções pedir
+  const tone = useCoverTone(t.art, (adaptive && (mode === "galaxy" || mode === "galaxyBlur")) || (mirrored && blurry));
   const base = `oklch(0.16 0.04 ${t.hue})`;
+  // "Transparência adaptativa": capa clara deixa as estrelas mais discretas; capa escura, mais visíveis
+  const galaxyOpacity = adaptive && tone ? 0.3 + 0.65 * (1 - tone.light) : mode === "galaxyBlur" ? 0.6 : 1;
   return (
     <div className="absolute inset-0 overflow-hidden transition-colors duration-700" style={{ background: mode === "solid" ? "var(--bg)" : base }}>
       {mode === "gradient" && <div className="absolute inset-0" style={{ background: `linear-gradient(160deg, oklch(0.42 0.13 ${t.hue}), oklch(0.2 0.06 ${(t.hue + 30) % 360}) 55%, oklch(0.12 0.03 ${t.hue}))` }} />}
@@ -322,10 +331,18 @@ function Backdrop({ t }: { t: Track }) {
           <motion.div key={t.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 1 }} className="absolute inset-0">
             <div className={cx("absolute -inset-[20%] blur-[90px] saturate-150 opacity-80", mode === "movingBlur" && "drift")} style={{ background: t.art ? `center / cover url("${t.art}")` : coverBg(t.hue, t.seed) }} />
             {mode === "movingBlur" && <div className="absolute -inset-[30%] blur-[110px] opacity-50 mix-blend-screen drift-rev" style={{ background: coverBg((t.hue + 40) % 360, t.seed + 1) }} />}
+            {/* "Cores espelhadas": a capa desfocada refletida e as cores marcantes dos dois lados, com o fundo ainda escuro */}
+            {mirrored && t.art && <div className="absolute -inset-[20%] blur-[90px] saturate-150 opacity-40 mix-blend-screen" style={{ background: `center / cover url("${t.art}")`, transform: "scaleX(-1)" }} />}
+            {mirrored && tone && tone.colors.length > 0 && <div className="absolute inset-0 blur-[60px] opacity-60 mix-blend-screen" style={{ background: [
+              `radial-gradient(55% 60% at 12% 30%, ${tone.colors[0]}, transparent 70%)`,
+              `radial-gradient(55% 60% at 88% 30%, ${tone.colors[1] ?? tone.colors[0]}, transparent 70%)`,
+              `radial-gradient(70% 50% at 50% 100%, ${tone.colors[2] ?? tone.colors[0]}, transparent 75%)`].join(",") }} />}
           </motion.div>
         </AnimatePresence>
       )}
-      {(mode === "galaxy" || mode === "galaxyBlur") && <div className={cx("absolute inset-0 galaxy", mode === "galaxyBlur" && "opacity-60 mix-blend-screen")} style={{ ["--h" as any]: t.hue }} />}
+      {(mode === "galaxy" || mode === "galaxyBlur") && <div className={cx("absolute inset-0 galaxy transition-opacity duration-700", mode === "galaxyBlur" && "mix-blend-screen")} style={{ ["--h" as any]: t.hue, opacity: galaxyOpacity }} />}
+      {/* "Dissolver a capa animada no fundo": o vídeo do Canvas, desfocado, atrás de tudo */}
+      {fade && canvasBg && mode !== "solid" && <video key={canvasBg} src={canvasBg} autoPlay loop muted playsInline data-canvas-bg className="absolute inset-0 size-full object-cover opacity-70 blur-2xl scale-125 animate-[fade_1s_ease]" />}
       {mode !== "solid" && <div className="absolute inset-0 bg-black/45" />}
     </div>
   );
@@ -338,6 +355,7 @@ export function NowPlaying() {
   const [side, setSide] = useState<"lyrics" | "queue">("lyrics");
   const align = useSetting<string>("playerTextAlign"), underCover = useSetting<boolean>("lyricsUnderCover"), hideThumb = useSetting<boolean>("hidePlayerThumbnail"), mode = useSetting<string>("playerBackground");
   const dark = mode !== "solid";
+  const canvas = useCanvas(open ? t : null);
   return (
     <AnimatePresence>
       {open && t && (
@@ -361,7 +379,8 @@ export function NowPlaying() {
                     <AnimatePresence mode="popLayout" initial={false}>
                       <motion.div key={t.id} initial={{ opacity: 0, scale: 0.9, rotate: -2 }} animate={{ opacity: 1, scale: 1, rotate: 0 }} exit={{ opacity: 0, scale: 0.92 }} transition={{ type: "spring", stiffness: 260, damping: 26 }}>
                         {hideThumb ? <div className="w-full aspect-square rounded-3xl bg-white/8 grid place-items-center"><AudioLines className="size-24 text-accent" /></div>
-                          : <motion.div animate={{ scale: 1 }}><Cover hue={t.hue} seed={t.seed} src={t.art} className="w-full rounded-3xl shadow-2xl shadow-black/50" /></motion.div>}
+                          : <motion.div animate={{ scale: 1 }} className="relative"><Cover hue={t.hue} seed={t.seed} src={t.art} hires className="w-full rounded-3xl shadow-2xl shadow-black/50" />
+                            {canvas && <video key={canvas} src={canvas} autoPlay loop muted playsInline data-canvas className="absolute inset-0 size-full rounded-3xl object-cover animate-[fade_0.6s_ease]" />}</motion.div>}
                       </motion.div>
                     </AnimatePresence>
                     {underCover && <LyricLineNow track={t} className="mt-5 h-7 text-[1.05rem] font-semibold text-t2" />}

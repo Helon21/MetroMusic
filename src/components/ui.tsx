@@ -1,7 +1,11 @@
-import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
+import { cachedSrc, warmImage } from "../lib/imageCache";
+import { tr } from "../i18n";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { motion } from "motion/react";
 import { Check, ChevronDown, Clock, Download, Folder, Heart, LoaderCircle, TrendingUp, Upload, X, HardDrive } from "lucide-react";
 import { cx } from "../lib/util";
+import { artCandidates, sizedArt } from "../lib/art";
+import { useSetting } from "../store/settings";
 import { useUI, type MenuItem } from "../store/ui";
 
 // ───────── Arte generativa (substitui capas reais enquanto não há backend)
@@ -19,11 +23,30 @@ export function coverBg(hue: number, seed: number): string {
 }
 const AUTO_ICONS: Record<string, ReactNode> = { heart: <Heart fill="currentColor" />, download: <Download />, trending: <TrendingUp />, cache: <HardDrive />, folder: <Folder />, upload: <Upload />, clock: <Clock /> };
 
-export function Cover({ hue, seed, round, artist, icon, src, className, style, children }: { hue: number; seed: number; round?: boolean; artist?: boolean; icon?: string; src?: string; className?: string; style?: CSSProperties; children?: ReactNode }) {
+/** Capa já guardada em disco, se houver; senão a da rede (e já pede para guardá-la). */
+function shownArt(url: string) {
+  warmImage(url);
+  return cachedSrc(url);
+}
+
+/** Imagem da capa: tenta o melhor endereço (ex.: miniatura 1280×720 do YouTube) e, se falhar, o seguinte; sem nenhum, some. */
+function CoverImg({ src, quality, hires, className }: { src: string; quality: number; hires?: boolean; className: string }) {
+  // só a capa grande (Tocando agora) busca a maior versão; as pequenas seguem como antes
+  const list = useMemo(() => (hires ? artCandidates(src, Math.max(quality, 1200)) : [sizedArt(src, quality)]), [src, quality, hires]);
+  const [i, setI] = useState(0);
+  if (i >= list.length) return null;
+  const next = () => setI((n) => n + 1);
+  return <img src={shownArt(list[i])} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" className={className} draggable={false} onError={next}
+    // o YouTube responde 404 com uma imagem cinza de 120×90 quando não existe a versão pedida: o navegador a aceita, então conferimos o tamanho
+    onLoad={(e) => { if (e.currentTarget.naturalWidth <= 120 && i < list.length - 1) next(); }} />;
+}
+
+export function Cover({ hue, seed, round, artist, icon, src, hires, className, style, children }: { hue: number; seed: number; round?: boolean; artist?: boolean; icon?: string; src?: string; /** capa grande: busca a versão de maior resolução */ hires?: boolean; className?: string; style?: CSSProperties; children?: ReactNode }) {
+  const crop = useSetting<boolean>("cropAlbumArt"), quality = Number(useSetting("artworkQuality"));
   return (
     <div className={cx("relative shrink-0 overflow-hidden bg-s2 aspect-square", round || artist ? "rounded-full" : "rounded-[10px]", className)}
       style={{ background: icon ? `linear-gradient(140deg, oklch(0.62 0.17 ${hue}), oklch(0.32 0.12 ${(hue + 40) % 360}))` : coverBg(hue, seed), ...style }}>
-      {src && <img src={src} alt="" referrerPolicy="no-referrer" loading="lazy" decoding="async" className="absolute inset-0 size-full object-cover" draggable={false} onError={(e) => { e.currentTarget.style.display = "none"; }} />}
+      {src && <CoverImg key={`${src}|${quality}|${hires ? 1 : 0}`} src={src} quality={quality} hires={hires} className={cx("absolute inset-0 size-full", crop || round || artist ? "object-cover" : "object-contain")} />}
       {artist && !src && (
         <svg viewBox="0 0 100 100" className="absolute inset-0 size-full" aria-hidden>
           <circle cx="50" cy="40" r="17" fill={`oklch(0.2 0.06 ${hue} / 0.55)`} /><path d="M14 104c0-24 16-38 36-38s36 14 36 38z" fill={`oklch(0.2 0.06 ${hue} / 0.55)`} />
@@ -39,7 +62,7 @@ export function Cover({ hue, seed, round, artist, icon, src, className, style, c
 // ───────── Controles básicos
 export function IconBtn({ children, label, active, onClick, className, size = 36, disabled, onContextMenu }: { children: ReactNode; label: string; active?: boolean; onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void; className?: string; size?: number; disabled?: boolean; onContextMenu?: (e: React.MouseEvent) => void }) {
   return (
-    <button title={label} aria-label={label} aria-pressed={active} disabled={disabled} onClick={onClick} onContextMenu={onContextMenu}
+    <button title={tr(label)} aria-label={tr(label)} aria-pressed={active} disabled={disabled} onClick={onClick} onContextMenu={onContextMenu}
       style={{ width: size, height: size }}
       className={cx("grid place-items-center rounded-full shrink-0 transition-[background,color,transform] duration-150 active:scale-90 [&>svg]:size-[1.15rem] disabled:opacity-35 disabled:pointer-events-none",
         active ? "text-accent bg-accent-soft" : "text-t2 hover:text-t1 hover:bg-s2", className)}>
@@ -53,7 +76,7 @@ export function Btn({ children, icon, variant = "soft", size = "md", onClick, cl
   const s = { sm: "h-8 px-3 text-[0.82rem] gap-1.5", md: "h-9.5 px-4 gap-2", lg: "h-12 px-6 gap-2.5 text-[1rem]" }[size];
   return (
     <button title={title} disabled={disabled} onClick={onClick} className={cx("inline-flex items-center justify-center rounded-full font-medium whitespace-nowrap shrink-0 transition-[background,filter,transform] duration-150 active:scale-[0.96] [&>svg]:size-[1.05rem] disabled:opacity-40 disabled:pointer-events-none", v, s, className)}>
-      {icon}{children}
+      {icon}{typeof children === "string" ? tr(children) : children}
     </button>
   );
 }
@@ -146,8 +169,8 @@ export function Empty({ icon, title, text, children }: { icon: ReactNode; title:
   return (
     <div className="flex flex-col items-center justify-center text-center py-16 px-6 gap-3">
       <div className="size-16 rounded-full bg-s2 grid place-items-center text-t3 [&>svg]:size-7">{icon}</div>
-      <div className="text-[1.05rem] font-semibold">{title}</div>
-      {text && <div className="text-t3 max-w-sm">{text}</div>}
+      <div className="text-[1.05rem] font-semibold">{tr(title)}</div>
+      {text && <div className="text-t3 max-w-sm">{tr(text)}</div>}
       {children && <div className="mt-2 flex gap-2">{children}</div>}
     </div>
   );

@@ -1,10 +1,11 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import { getTrack, registerTrack, sample, songs, type SourceId, type Track } from "../lib/catalog";
+import { getTrack, registerTrack, sample, songs, type ExtInfo, type SourceId, type Track } from "../lib/catalog";
 import { useLib } from "./library";
 import { backend, engine } from "../lib/engine";
 import { onEvent } from "../lib/native";
 import { getSetting, useSettings } from "./settings";
+import { liveBitrate } from "../lib/liveBitrate";
 import { toast } from "./ui";
 
 // Reprodução. Faixas reais (com `ext`) tocam pelo backend: posição, estado, fim e erro chegam como
@@ -21,7 +22,7 @@ interface Player {
   trackEnded: () => void;
   queue: string[]; index: number; position: number; playing: boolean; buffering: boolean; error: string | null;
   shuffle: boolean; repeat: Repeat; volume: number; muted: boolean; speed: number; pitch: number;
-  queueTitle: string; unshuffled: string[] | null; sleep: Sleep | null; sourceOverride: Record<string, SourceId>;
+  queueTitle: string; unshuffled: string[] | null; sleep: Sleep | null; sourceOverride: Record<string, ExtInfo>;
   radioOf: string | null;
   play: (ids: string[], start?: number, title?: string, opts?: { shuffle?: boolean }) => void;
   playNext: (ids: string[]) => void; addToQueue: (ids: string[]) => void;
@@ -29,8 +30,8 @@ interface Player {
   remove: (i: number) => void; reorder: (ids: string[]) => void; clearUpcoming: () => void;
   toggleShuffle: () => void; cycleRepeat: () => void; setVolume: (v: number) => void; toggleMute: () => void;
   setSpeed: (v: number) => void; setPitch: (v: number) => void; setSleep: (s: Sleep | null) => void;
-  setSource: (trackId: string, src: SourceId | null) => void; startRadio: (trackId: string) => void;
-  setError: (e: string | null) => void; tick: (dt: number) => void;
+  setSource: (trackId: string, src: ExtInfo | null) => void; startRadio: (trackId: string) => void;
+  setError: (e: string | null, opts?: { manual?: boolean }) => void; tick: (dt: number) => void;
 }
 
 let bufferTimer: ReturnType<typeof setTimeout> | undefined;
@@ -48,12 +49,16 @@ const slowStorage = (() => {
 })();
 const shuffled = (ids: string[]) => { const a = [...ids]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
+/** Falhas seguidas ao pular automaticamente; zera quando uma faixa toca de verdade. */
+let errorStreak = 0;
+
 export const usePlayer = create<Player>()(
   persist(
     (set, get) => {
       /** Faixa real (do backend) ou `undefined` para as de demonstração. */
       const real = (id?: string) => { const t = id ? getTrack(id) : undefined; return backend && t?.ext ? t : undefined; };
-      const syncVolume = () => { const s = get(); engine.setVolume(s.muted ? 0 : s.volume); };
+      let sleepFade = 1; // 1 = volume normal; cai a 0 no último minuto do timer de sono
+      const syncVolume = () => { const s = get(); engine.setVolume(s.muted ? 0 : s.volume * sleepFade); };
       /** Troca de faixa: registra no histórico e começa a tocar (no backend ou no simulador). */
       const started = (extra: Partial<Player> = {}) => {
         set({ position: 0, playing: true, buffering: true, error: null, info: null, ...extra });
@@ -61,14 +66,13 @@ export const usePlayer = create<Player>()(
         const id = get().queue[get().index];
         const t = real(id);
         if (t) {
-          engine.play(t.ext!, 0)
+          engine.play(playableExt(id!)!, 0)
             .then((token) => { if (token && token > get().engineToken) set({ engineToken: token }); })
             .catch((e) => get().setError(String(e)));
         } else {
           if (backend) engine.stop();
           bufferTimer = setTimeout(() => set({ buffering: false }), 450);
         }
-        if (id && !getSetting("pauseHistory")) useLib.getState().pushHistory(id);
       };
       const similar = (seedId: string, n = 15) => {
         const t = getTrack(seedId); const inQueue = new Set(get().queue);
@@ -76,11 +80,25 @@ export const usePlayer = create<Player>()(
         const same = pool.filter((s) => s.artistId === t?.artistId);
         return [...sample(same, 3, Date.now()), ...sample(pool, n, Date.now() + 1)].slice(0, n).map((s) => s.id);
       };
+      /** Mistura faixas parecidas (rádio da faixa atual) em posições aleatórias do que ainda vai tocar. */
+      const mixSimilar = () => {
+        const s0 = get(); const cur = real(s0.queue[s0.index]); const want = Math.min(15, Math.ceil(s0.queue.length / 4));
+        const insert = (ids: string[]) => {
+          const s = get(); const have = new Set(s.queue);
+          const fresh = ids.filter((i) => !have.has(i)).slice(0, want);
+          if (!fresh.length || s.queue[s.index] !== s0.queue[s0.index]) return;
+          const q = [...s.queue];
+          for (const id of fresh) q.splice(s.index + 1 + Math.floor(Math.random() * (q.length - s.index)), 0, id);
+          set({ queue: q });
+        };
+        if (cur?.ext?.provider === "youtube") engine.ytRadio(cur.ext.id).then((list) => insert((list ?? []).map((t) => registerTrack(t).id))).catch(() => {});
+        else insert(similar(s0.queue[s0.index], want));
+      };
       return {
         engineToken: 0, info: null,
         trackEnded: () => {
           const s = get();
-          if (s.sleep?.endOfSong) { toast("Timer de sono: reprodução pausada"); if (real(s.queue[s.index])) engine.pause(); return set({ playing: false, sleep: null, position: 0 }); }
+          if (s.sleep?.endOfSong) { sleepFade = 1; syncVolume(); toast("Timer de sono: reprodução pausada"); if (real(s.queue[s.index])) engine.pause(); return set({ playing: false, sleep: null, position: 0 }); }
           if (s.repeat === "one") return started();
           if (!getSetting("autoplay")) return set({ playing: false, position: 0 });
           s.next(true);
@@ -97,6 +115,8 @@ export const usePlayer = create<Player>()(
             set({ queue: [first, ...shuffled(ids.filter((i) => i !== first))], unshuffled: ids, index: 0, shuffle: true, queueTitle: title, radioOf: null });
           } else set({ queue: ids, index: start, unshuffled: null, shuffle: false, queueTitle: title, radioOf: null });
           started();
+          // "Embaralhar a playlist primeiro" desligado: o conteúdo semelhante entra no meio do aleatório, sem esperar a lista acabar
+          if (wantShuffle && !getSetting("shufflePlaylistFirst") && getSetting("autoLoadMore") && getSetting("similarContent")) mixSimilar();
         },
         playNext: (ids) => {
           const s = get();
@@ -125,7 +145,7 @@ export const usePlayer = create<Player>()(
         next: (auto = false) => {
           const s = get(); if (!s.queue.length) return;
           if (s.index < s.queue.length - 1) return started({ index: s.index + 1 });
-          if (s.repeat === "all") return started({ index: 0 });
+          if (s.repeat === "all" && (getSetting("noLoadMoreOnRepeat") || !(getSetting("autoLoadMore") && getSetting("similarContent")))) return started({ index: 0 });
           if (getSetting("autoLoadMore") && getSetting("similarContent")) {
             // Faixa do YouTube Music: a continuação é a rádio real dela.
             const cur = real(s.queue[s.index]);
@@ -164,11 +184,17 @@ export const usePlayer = create<Player>()(
         setVolume: (volume) => { set({ volume: Math.max(0, Math.min(1, volume)), muted: false }); syncVolume(); },
         toggleMute: () => { set((s) => ({ muted: !s.muted })); syncVolume(); },
         setSpeed: (speed) => { set({ speed }); engine.setSpeed(speed); }, setPitch: (pitch) => set({ pitch }),
-        setSleep: (sleep) => set({ sleep }),
+        setSleep: (sleep) => { set({ sleep }); if (!sleep?.endsAt && sleepFade !== 1) { sleepFade = 1; syncVolume(); } },
         setSource: (trackId, src) => {
-          set((s) => { const o = { ...s.sourceOverride }; if (src) o[trackId] = src; else delete o[trackId]; return { sourceOverride: o, buffering: s.queue[s.index] === trackId }; });
+          const wasCurrent = get().queue[get().index] === trackId, at = get().position;
+          set((s) => { const o = { ...s.sourceOverride }; if (src) o[trackId] = src; else delete o[trackId]; return { sourceOverride: o, buffering: wasCurrent }; });
           clearTimeout(bufferTimer);
-          bufferTimer = setTimeout(() => set({ buffering: false }), 600);
+          const ext = playableExt(trackId);
+          if (wasCurrent && backend && ext) {
+            // está tocando: troca a fonte agora, na posição em que estava
+            engine.play(ext, at).then((token) => { if (token && token > get().engineToken) set({ engineToken: token }); }).catch((e) => get().setError(String(e), { manual: true }));
+          } else bufferTimer = setTimeout(() => set({ buffering: false }), 600);
+          syncNext(); syncPrecache();
         },
         startRadio: (trackId) => {
           const t = getTrack(trackId); if (!t) return;
@@ -186,11 +212,30 @@ export const usePlayer = create<Player>()(
           set({ queue: [trackId, ...similar(trackId, 24)] });
           started();
         },
-        setError: (error) => set({ error, playing: false, buffering: false }),
+        setError: (error, opts) => {
+          set({ error, playing: false, buffering: false });
+          if (!error || opts?.manual) { errorStreak = 0; return; }
+          // Falha da faixa: por padrão pula para a próxima; o modo de depuração e o "perguntar antes" param aqui.
+          if (!getSetting("autoSkipOnError") || getSetting("stopOnProviderError") || getSetting("expConfirmSkip")) return;
+          const s = get();
+          if (s.index >= s.queue.length - 1 || ++errorStreak > 5) { errorStreak = 0; return; }
+          toast("Não consegui tocar esta faixa; indo para a próxima");
+          setTimeout(() => get().next(), 600);
+        },
         tick: (dt) => {
           const s = get();
           if (!s.playing || s.buffering || s.error) return;
-          if (s.sleep?.endsAt && Date.now() >= s.sleep.endsAt) { toast("Timer de sono: reprodução pausada"); if (real(s.queue[s.index])) engine.pause(); return set({ playing: false, sleep: null }); }
+          if (s.sleep?.endsAt) {
+            const left = s.sleep.endsAt - Date.now();
+            if (left <= 0) {
+              // "Esperar a música atual terminar": o timer vira "no fim da faixa" em vez de cortar no meio
+              if (getSetting("sleepStopAfterSong")) { set({ sleep: { endOfSong: true } }); sleepFade = 1; syncVolume(); return; }
+              sleepFade = 1; syncVolume();
+              toast("Timer de sono: reprodução pausada"); if (real(s.queue[s.index])) engine.pause(); return set({ playing: false, sleep: null });
+            }
+            const f = getSetting("sleepFadeOut") && left < 60000 ? Math.max(0, left / 60000) : 1;
+            if (Math.abs(f - sleepFade) > 0.02) { sleepFade = f; syncVolume(); }
+          }
           const t = getTrack(s.queue[s.index]); if (!t) return;
           if (real(t.id)) return; // a posição de faixas reais vem do motor, por evento
           const position = s.position + dt * s.speed;
@@ -210,7 +255,17 @@ export const usePlayer = create<Player>()(
 export const useCurrent = (): Track | undefined => usePlayer((s) => getTrack(s.queue[s.index]));
 export const currentTrack = () => { const s = usePlayer.getState(); return getTrack(s.queue[s.index]); };
 /** Provedor efetivo da faixa, considerando a escolha manual de fonte. */
-export const useProvider = (t?: Track) => usePlayer((s) => (t ? (s.sourceOverride[t.id] ?? t.provider) : undefined));
+export const useProvider = (t?: Track) => usePlayer((s): SourceId | undefined => { if (!t) return undefined; const p = s.sourceOverride[t.id]?.provider; return !p ? t.provider : p === "local" ? "offline" : p; });
+
+/** O que o motor deve tocar para a faixa: a fonte escolhida pelo usuário ou a original. */
+export const playableExt = (id: string): ExtInfo | undefined => {
+  const chosen = usePlayer.getState().sourceOverride[id];
+  if (chosen) return chosen;
+  const ext = getTrack(id)?.ext;
+  // música baixada: toca o arquivo do disco (funciona sem internet)
+  const file = useLib.getState().downloadPaths[id];
+  return file && ext ? { ...ext, provider: "local", id: file } : ext;
+};
 
 // ───────── Backend: pré-cache, cache e eventos de áudio
 
@@ -222,7 +277,7 @@ export function syncPrecache() {
   precacheTimer = setTimeout(() => {
     const s = usePlayer.getState();
     const count = Number(getSetting("preload")) || 0;
-    const upcoming = s.repeat === "one" ? [] : s.queue.slice(s.index + 1).map((id) => getTrack(id)).filter((t) => t?.ext).map((t) => t!.ext!);
+    const upcoming = s.repeat === "one" ? [] : s.queue.slice(s.index + 1).map((id) => playableExt(id)).filter((e): e is ExtInfo => !!e);
     engine.precache(upcoming, count);
   }, 250);
 }
@@ -232,7 +287,7 @@ export function nextCandidate(s: { queue: string[]; index: number; repeat: strin
   if (!s.queue.length) return null;
   if (s.repeat === "one") return { index: s.index, id: s.queue[s.index] };
   if (s.index < s.queue.length - 1) return { index: s.index + 1, id: s.queue[s.index + 1] };
-  if (s.repeat === "all" && s.queue.length > 1) return { index: 0, id: s.queue[0] };
+  if (s.repeat === "all" && s.queue.length > 1 && (getSetting("noLoadMoreOnRepeat") || !(getSetting("autoLoadMore") && getSetting("similarContent")))) return { index: 0, id: s.queue[0] };
   return null;
 }
 
@@ -246,11 +301,31 @@ export function syncNext() {
     const cur = getTrack(s.queue[s.index]);
     const c = nextCandidate(s);
     const nx = c ? getTrack(c.id) : undefined;
-    if (!cur?.ext || !nx?.ext || !getSetting("autoplay")) return void engine.setNext(null, false);
+    const curExt = cur && playableExt(cur.id), nxExt = nx && playableExt(nx.id);
+    if (!curExt || !nxExt || !getSetting("autoplay")) return void engine.setNext(null, false);
     // álbum contínuo: mesma coleção real nas duas faixas e a opção "desativar em álbuns sem pausa" ligada
-    const pair = !!getSetting("crossfadeGapless") && !!cur.ext.albumId && cur.ext.albumId === nx.ext.albumId;
-    engine.setNext(nx.ext, pair);
+    const pair = !!getSetting("crossfadeGapless") && !!curExt.albumId && curExt.albumId === nxExt.albumId;
+    engine.setNext(nxExt, pair);
   }, 300);
+}
+
+/**
+ * Histórico de escuta: a faixa só entra depois de `historyDuration` segundos realmente ouvidos
+ * (o tempo conta só com a reprodução andando; pular de volta ou pausar não conta).
+ */
+export function initHistoryTracker() {
+  let id = "", listened = 0, done = false, lastPos = 0;
+  usePlayer.subscribe((s) => {
+    const cur = s.queue[s.index] ?? "";
+    if (cur !== id) { id = cur; listened = 0; done = false; lastPos = s.position; return; }
+    const d = s.position - lastPos; lastPos = s.position;
+    if (done || !s.playing || s.buffering || d <= 0 || d > 2) return;
+    listened += d / Math.max(0.25, s.speed);
+    if (listened >= Math.max(1, Number(getSetting("historyDuration")))) {
+      done = true;
+      if (id && !getSetting("pauseHistory")) useLib.getState().pushHistory(id);
+    }
+  });
 }
 
 /** Liga os eventos `audio:*` ao player e leva ao backend as configurações de volume, cache, pré-cache, EQ, normalização e crossfade. */
@@ -268,11 +343,16 @@ export async function initBackend() {
   };
   const fixDuration = (sec: number) => { const t = current(); if (t && Math.abs(t.duration - sec) > 1) t.duration = Math.round(sec); };
 
-  await onEvent<any>("audio:position", (p) => { if (!fresh(p)) return; P.setState({ position: p.position }); if (p.duration) fixDuration(p.duration); });
+  await onEvent<any>("audio:position", (p) => {
+    if (!fresh(p)) return;
+    P.setState({ position: p.position }); if (p.duration) fixDuration(p.duration);
+    const next = liveBitrate(P.getState().info, p.liveBitrate, getSetting("liveBitrate") !== false);
+    if (next) P.setState({ info: next });
+  });
   await onEvent<any>("audio:state", (p) => {
     if (!fresh(p)) return;
     if (p.state === "loading" || p.state === "buffering") P.setState({ buffering: true });
-    else if (p.state === "playing") P.setState({ buffering: false, playing: true });
+    else if (p.state === "playing") { errorStreak = 0; P.setState({ buffering: false, playing: true }); }
     else if (p.state === "paused") P.setState({ playing: false });
     else if (p.state === "error") P.getState().setError(p.message ?? "Erro de reprodução");
   });
@@ -291,7 +371,6 @@ export async function initBackend() {
     if (idx < 0) return;
     P.setState({ index: idx, position: 0, playing: true, buffering: false, error: null, engineToken: Math.max(s.engineToken, p.token), info: { key: p.key, source: p.source, codec: p.codec, bitrate: p.bitrate } });
     if (p.duration) fixDuration(p.duration);
-    if (!getSetting("pauseHistory")) useLib.getState().pushHistory(p.key);
   });
   // a faixa atual carregou: agora dá para entregar a próxima ao motor
   await onEvent<any>("audio:loaded", () => syncNext());

@@ -15,6 +15,17 @@ pub async fn search_online(provider: String, query: String, limit: Option<usize>
     providers::search(&provider, &query, limit.unwrap_or(20)).await
 }
 
+/// Fontes de áudio válidas para a mesma música (modal "Escolher fonte de áudio").
+/// Vídeo do Spotify Canvas da faixa (ou `None`); precisa da conta do Spotify conectada.
+#[tauri::command]
+pub async fn spotify_canvas(track: TrackInfo) -> Option<String> {
+    if !providers::spotify::is_logged_in() { return None; }
+    match providers::spotify::canvas_url(&track).await { Ok(u) => u, Err(e) => { eprintln!("[canvas] {}: {e}", track.key()); None } }
+}
+
+#[tauri::command]
+pub async fn source_candidates(track: TrackInfo, order: Vec<String>) -> Vec<providers::Candidate> { providers::candidates(&track, &order).await }
+
 #[tauri::command]
 pub fn audio_play(player: P, track: TrackInfo, start: Option<f64>, autoplay: Option<bool>, order: Vec<String>) -> Res<u64> {
     player.inner().play(track, start.unwrap_or(0.0), autoplay.unwrap_or(true), order)
@@ -64,6 +75,14 @@ pub fn cache_configure(player: P, limit_mb: Option<u64>, enabled: Option<bool>) 
 pub async fn yt_home(chip_browse_id: Option<String>, chip_params: Option<String>, continuation: Option<String>) -> Res<ytmusic::HomeFeed> {
     ytmusic::home(chip_browse_id.map(|b| (b, chip_params)), continuation).await
 }
+
+#[tauri::command]
+pub async fn yt_page_more(token: String, artwork: Option<String>) -> Res<(Vec<TrackInfo>, Option<String>)> {
+    ytmusic::page_more(&token, artwork).await
+}
+
+#[tauri::command]
+pub async fn yt_page_partial(browse_id: String) -> Res<ytmusic::Page> { ytmusic::page_partial(&browse_id).await }
 
 #[tauri::command]
 pub async fn yt_page(browse_id: String) -> Res<ytmusic::Page> {
@@ -424,3 +443,21 @@ pub async fn library_save(provider: String, kind: String, id: String, save: bool
         p => Err(unsupported(p, "Salvar na biblioteca")),
     }
 }
+
+/// Idioma, país e uso do login ao navegar (Configurações › Conteúdo e Privacidade).
+#[tauri::command]
+pub fn content_prefs_set(language: String, country: String, login_for_browse: bool) { providers::prefs::set(&language, &country, login_for_browse); }
+
+/// Qualidade do áudio (Configurações › Player e áudio).
+#[tauri::command]
+pub fn audio_quality_set(quality: String, soundcloud: Option<String>, jio_quality: Option<String>, jio_language: Option<String>) {
+    if let Some(q) = jio_quality {
+        if providers::prefs::set_jio(&q, &jio_language.unwrap_or_default()) { providers::jiosaavn::clear_streams(); }
+    }
+    providers::prefs::set_quality(&quality);
+    if let Some(q) = soundcloud { if providers::prefs::set_sc_quality(&q) { providers::soundcloud::clear_streams(); } }
+}
+
+/// Saúde de cada provedor de áudio (Configurações › Saúde dos provedores).
+#[tauri::command]
+pub async fn provider_health() -> Vec<providers::health::Health> { providers::health::check_all().await }

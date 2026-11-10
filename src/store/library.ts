@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { albums, artists, getPlaylist, playlists as catalogPlaylists, podcasts, rng, sample, songs, type Playlist } from "../lib/catalog";
+import { isTauri } from "../lib/native";
 import { getSetting } from "./settings";
 import { toast } from "./ui";
 
@@ -10,7 +11,7 @@ export interface Recognition { id: string; at: number }
 
 interface Lib {
   liked: string[]; savedAlbums: string[]; followed: string[]; savedPlaylists: string[]; subscribedPodcasts: string[]; later: string[];
-  playlists: Playlist[]; downloads: Record<string, number>; cached: string[]; localFiles: string[];
+  playlists: Playlist[]; downloads: Record<string, number>; downloadPaths: Record<string, string>; cached: string[]; localFiles: string[];
   pins: Pin[]; history: HistoryEntry[]; searchHistory: string[]; recognitions: Recognition[]; counts: Record<string, number>;
   folders: string[]; accounts: Record<string, string>;
   toggleLike: (id: string) => void; setLiked: (ids: string[], on: boolean) => void;
@@ -20,6 +21,10 @@ interface Lib {
   updatePlaylist: (id: string, patch: Partial<Playlist>) => void; deletePlaylist: (id: string) => void;
   addToPlaylist: (id: string, trackIds: string[], allowDup?: boolean) => number; removeFromPlaylist: (id: string, trackIds: string[]) => void;
   download: (ids: string[]) => void; removeDownload: (ids: string[]) => void; tickDownloads: () => void;
+  /** Progresso (0 a 1) de um download; com `path`, o arquivo já está no disco. */
+  setDownload: (id: string, progress: number, path?: string) => void;
+  /** Passa o tempo de escuta de uma música para outra (contagem e histórico). */
+  transferTime: (from: string, to: string) => number;
   togglePin: (p: Pin) => void; pushHistory: (id: string) => void; removeHistory: (at: number) => void;
   pushSearch: (q: string) => void; removeSearch: (q: string) => void;
   addRecognition: (id: string) => void; removeRecognition: (at: number) => void;
@@ -31,7 +36,7 @@ interface Lib {
 function seed() {
   return {
     liked: [] as string[], savedAlbums: [] as string[], followed: [] as string[], savedPlaylists: [] as string[], subscribedPodcasts: [] as string[], later: [] as string[],
-    playlists: [] as Playlist[], downloads: {} as Record<string, number>, cached: [] as string[], localFiles: [] as string[],
+    playlists: [] as Playlist[], downloads: {} as Record<string, number>, downloadPaths: {} as Record<string, string>, cached: [] as string[], localFiles: [] as string[],
     pins: [] as Pin[], history: [] as HistoryEntry[], counts: {} as Record<string, number>, searchHistory: [] as string[], recognitions: [] as Recognition[],
     folders: [] as string[], accounts: {} as Record<string, string>,
   };
@@ -83,9 +88,29 @@ export const useLib = create<Lib>()(
           return add.length;
         },
         removeFromPlaylist: (id, trackIds) => { const p = get().playlists.find((x) => x.id === id); if (p) get().updatePlaylist(id, { trackIds: p.trackIds.filter((t) => !trackIds.includes(t)) }); },
-        download: (ids) => set((s) => { const d = { ...s.downloads }; ids.forEach((i) => { if (!(i in d)) d[i] = 0.001; }); return { downloads: d }; }),
-        removeDownload: (ids) => set((s) => { const d = { ...s.downloads }; ids.forEach((i) => delete d[i]); return { downloads: d }; }),
+        download: (ids) => {
+          const fresh = ids.filter((i) => !(i in get().downloads));
+          set((s) => { const d = { ...s.downloads }; fresh.forEach((i) => { d[i] = 0.001; }); return { downloads: d }; });
+          // no app nativo baixa de verdade (a simulação abaixo só roda no navegador)
+          if (isTauri && fresh.length) import("../lib/downloads").then((m) => m.downloadTracks(fresh));
+        },
+        removeDownload: (ids) => {
+          const paths = ids.map((i) => get().downloadPaths[i]).filter(Boolean);
+          set((s) => { const d = { ...s.downloads }, p = { ...s.downloadPaths }; ids.forEach((i) => { delete d[i]; delete p[i]; }); return { downloads: d, downloadPaths: p }; });
+          if (isTauri && paths.length) import("../lib/downloads").then((m) => m.deleteFiles(paths));
+        },
+        setDownload: (id, progress, path) => set((s) => ({ downloads: { ...s.downloads, [id]: progress }, ...(path ? { downloadPaths: { ...s.downloadPaths, [id]: path } } : {}) })),
+        transferTime: (from, to) => {
+          const n = get().counts[from] ?? 0;
+          if (!n || from === to) return 0;
+          set((s) => {
+            const counts = { ...s.counts, [to]: (s.counts[to] ?? 0) + n }; delete counts[from];
+            return { counts, history: s.history.map((h) => (h.id === from ? { ...h, id: to } : h)) };
+          });
+          return n;
+        },
         tickDownloads: () => {
+          if (isTauri) return; // no app nativo o progresso vem do backend
           const d = get().downloads; let changed = false; const next = { ...d }; let active = 0;
           for (const k in next) if (next[k] < 1 && active < 3) { active++; next[k] = Math.min(1, next[k] + 0.08 + Math.random() * 0.1); changed = true; if (next[k] === 1 && !Object.values(next).some((v) => v < 1)) toast("Downloads concluídos"); }
           if (changed) set({ downloads: next });
@@ -99,7 +124,7 @@ export const useLib = create<Lib>()(
         removeRecognition: (at) => set((s) => ({ recognitions: s.recognitions.filter((r) => r.at !== at) })),
         setAccount: (service, name) => set((s) => { const a = { ...s.accounts }; if (name) a[service] = name; else delete a[service]; return { accounts: a }; }),
         setFolders: (folders) => set({ folders }),
-        clear: (what) => set(what === "downloads" ? { downloads: {} } : ({ [what]: [] } as Partial<Lib>)),
+        clear: (what) => set(what === "downloads" ? { downloads: {}, downloadPaths: {} } : ({ [what]: [] } as Partial<Lib>)),
       };
     },
     { name: "metromusic-library-v1", version: 2, migrate: (p: any, v: number) => (v < 2 ? purgeMock(p) : p) },

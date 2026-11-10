@@ -75,6 +75,9 @@ pub struct Page {
     pub audio_playlist_id: Option<String>,
     /// Playlist que a conta pode editar (adicionar, remover, renomear, excluir).
     pub editable: bool,
+    /// Playlist longa carregada em partes: token para buscar o resto (`page_more`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<String>,
 }
 
 // ───────── Utilidades de JSON
@@ -158,7 +161,7 @@ fn two_row(r: &Value) -> Option<Item> {
         if artists.is_empty() {
             // sem links: pega o primeiro trecho que não seja separador nem o tipo ("Song", "Video")
             if let Some(a) = sub.get("runs").and_then(|r| r.as_array()).into_iter().flatten().filter_map(|x| x.get("text").and_then(|t| t.as_str())).map(str::trim)
-                .find(|t| !t.is_empty() && *t != "•" && !matches!(*t, "Song" | "Video" | "Música" | "Vídeo")) { artists.push(a.to_string()); }
+                .find(|t| !t.is_empty() && *t != "•" && !super::is_type_label(t)) { artists.push(a.to_string()); }
         }
         if artists.is_empty() { artists.push("Artista desconhecido".into()); }
         let (artist_id, album_id) = link_ids(sub.get("runs").and_then(|r| r.as_array()).into_iter().flatten());
@@ -201,13 +204,19 @@ fn carousel(shelf: &Value) -> Option<Section> {
 
 // ───────── Requisições
 
-async fn browse(body_extra: Value) -> Res<Value> {
+async fn browse(body_extra: Value) -> Res<Value> { browse_as(body_extra, true).await }
+
+/// Navegação (Início, Explorar, páginas): respeita "Usar o login para navegar". Desligado, vai sem a sessão
+/// e a Início deixa de ser a da conta. A biblioteca e as escritas usam `browse` e sempre vão com a sessão.
+async fn browse_public(body_extra: Value) -> Res<Value> { browse_as(body_extra, auth::is_logged_in() && super::prefs::login_for_browse()).await }
+
+async fn browse_as(body_extra: Value, signed: bool) -> Res<Value> {
     let visitor = visitor_data().await;
     let mut ctx = context(&WEB_REMIX, &visitor);
-    if auth::is_logged_in() { if let Some(d) = auth::on_behalf_of() { ctx["user"]["onBehalfOfUser"] = json!(d); } }
+    if signed && auth::is_logged_in() { if let Some(d) = auth::on_behalf_of() { ctx["user"]["onBehalfOfUser"] = json!(d); } } else { ctx["user"].as_object_mut().map(|u| u.remove("onBehalfOfUser")); }
     let mut body = json!({ "context": ctx });
     if let (Some(b), Some(extra)) = (body.as_object_mut(), body_extra.as_object()) { for (k, v) in extra { b.insert(k.clone(), v.clone()); } }
-    post("browse", &WEB_REMIX, &visitor, body, true).await
+    post("browse", &WEB_REMIX, &visitor, body, signed).await
 }
 
 /// Próxima parte de uma lista longa. As listas da conta (curtidas, histórico) só respondem de verdade
@@ -227,15 +236,15 @@ fn continuation_of(section_list: &Value) -> Option<String> {
 
 /// Início do YouTube Music: personalizada se houver sessão. `chip` filtra por clima; `continuation` traz mais seções.
 pub async fn home(chip: Option<(String, Option<String>)>, continuation: Option<String>) -> Res<HomeFeed> {
-    let personalized = auth::is_logged_in();
+    let personalized = auth::is_logged_in() && super::prefs::login_for_browse();
     if let Some(c) = continuation {
-        let v = browse(json!({ "continuation": c })).await?;
+        let v = browse_public(json!({ "continuation": c })).await?;
         let sl = at(&v, "continuationContents.sectionListContinuation").ok_or("a continuação da Início veio vazia")?;
         let sections = sl.get("contents").and_then(|c| c.as_array()).into_iter().flatten().filter_map(|c| c.get("musicCarouselShelfRenderer")).filter_map(carousel).collect();
         return Ok(HomeFeed { chips: vec![], sections, continuation: continuation_of(sl), personalized });
     }
     let (browse_id, params) = chip.unwrap_or(("FEmusic_home".into(), None));
-    let v = browse(json!({ "browseId": browse_id, "params": params })).await?;
+    let v = browse_public(json!({ "browseId": browse_id, "params": params })).await?;
     let sl = at(&v, "contents.singleColumnBrowseResultsRenderer.tabs.0.tabRenderer.content.sectionListRenderer").ok_or("resposta da Início sem seções")?;
     let sections: Vec<Section> = sl.get("contents").and_then(|c| c.as_array()).into_iter().flatten().filter_map(|c| c.get("musicCarouselShelfRenderer")).filter_map(carousel).collect();
     let chips = at(sl, "header.chipCloudRenderer.chips").and_then(|c| c.as_array()).into_iter().flatten().filter_map(|c| {
@@ -286,8 +295,28 @@ fn page_track(r: &Value, album: Option<&str>, fallback_artists: &[String], fallb
 }
 
 /// Álbum, playlist, artista ou lista da biblioteca (`browse_id` como veio do cartão).
-pub async fn page(browse_id: &str) -> Res<Page> {
-    let v = browse(json!({ "browseId": browse_id })).await?;
+pub async fn page(browse_id: &str) -> Res<Page> { page_inner(browse_id, false).await }
+
+/// Como `page`, mas playlists longas voltam só com a primeira parte e um `continuation` para o resto.
+pub async fn page_partial(browse_id: &str) -> Res<Page> { page_inner(browse_id, true).await }
+
+/// Próxima parte de uma playlist longa: faixas + token seguinte (se ainda houver mais).
+pub async fn page_more(token: &str, artwork: Option<String>) -> Res<(Vec<TrackInfo>, Option<String>)> {
+    let more = browse_more(token).await?;
+    let cont = at(&more, "continuationContents.musicPlaylistShelfContinuation").or_else(|| at(&more, "continuationContents.musicShelfContinuation"));
+    let (rows, next) = match cont {
+        Some(c) => shelf_rows(c),
+        None => match at(&more, "onResponseReceivedActions.0.appendContinuationItemsAction") {
+            Some(a) => shelf_rows(&json!({ "contents": a.get("continuationItems").cloned().unwrap_or(Value::Null) })),
+            None => return Ok((vec![], None)),
+        },
+    };
+    Ok((rows.into_iter().filter_map(|r| page_track(&r, None, &[], &artwork)).collect(), next))
+}
+
+async fn page_inner(browse_id: &str, partial: bool) -> Res<Page> {
+    let mut continuation = None;
+    let v = browse_public(json!({ "browseId": browse_id })).await?;
     let kind = kind_of(browse_id);
     let header = HEADERS.iter().find_map(|k| find_all(&v, k).into_iter().next());
     let (mut title, mut subtitle, mut description, mut artwork, mut strapline) = (String::new(), String::new(), None::<String>, None::<String>, Vec::<String>::new());
@@ -313,6 +342,7 @@ pub async fn page(browse_id: &str) -> Res<Page> {
         let (rows, mut next) = shelf_rows(shelf);
         tracks.extend(rows.into_iter().filter_map(|r| page_track(&r, album, &strapline, &artwork)));
         // playlists longas vêm em partes
+        if partial && kind == "playlist" { continuation = next.take(); }
         let mut guard = 0;
         while let (Some(token), true) = (next.take(), kind != "artist" && guard < 120) {
             guard += 1;
@@ -334,7 +364,7 @@ pub async fn page(browse_id: &str) -> Res<Page> {
     if kind == "album" { for t in tracks.iter_mut() { t.album_id.get_or_insert_with(|| browse_id.to_string()); } }
     let editable = !find_all(&v, "musicEditablePlaylistDetailHeaderRenderer").is_empty();
     let audio_playlist_id = if kind == "album" { first_string_with_prefix(&v, "OLAK5uy") } else { None };
-    Ok(Page { kind: kind.into(), id: browse_id.into(), title, subtitle, description, artwork, tracks, sections, items, audio_playlist_id, editable })
+    Ok(Page { kind: kind.into(), id: browse_id.into(), title, subtitle, description, artwork, tracks, sections, items, audio_playlist_id, editable, continuation })
 }
 
 /// Fila de "rádio": músicas parecidas com `video_id`, ou o conteúdo de um mix/playlist de reprodução (`playlist_id`).
@@ -496,7 +526,7 @@ fn tiles_of(items: &[Value]) -> Vec<Tile> {
 pub async fn explore(browse_id: &str, params: Option<&str>) -> Res<Explore> {
     let mut body = json!({ "browseId": browse_id });
     if let Some(p) = params { body["params"] = json!(p); }
-    let v = browse(body).await?;
+    let v = browse_public(body).await?;
     let mut out = Explore { title: at(&v, "header.musicHeaderRenderer.title").map(runs_text).unwrap_or_default(), ..Default::default() };
     // carrosséis: cartões, listas de músicas ou blocos de navegação
     for shelf in find_all(&v, "musicCarouselShelfRenderer") {

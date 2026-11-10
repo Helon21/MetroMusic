@@ -1,3 +1,4 @@
+import { tr } from "../i18n";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowDownToLine, Check, ChevronRight, CornerDownLeft, Heart, ListEnd, ListPlus, ListStart, Play, Search, Shuffle, Trash2, X } from "lucide-react";
@@ -28,7 +29,7 @@ function MenuList({ items, x, y, onClose, depth = 0 }: { items: MenuItem[]; x: n
         style={{ left: pos.x, top: pos.y, boxShadow: "var(--shadow)", transformOrigin: "top left" }} className="fixed z-[90] w-60 max-h-[80vh] overflow-y-auto p-1.5 rounded-xl bg-s2/95 backdrop-blur-xl">
         {items.map((it, i) =>
           it.divider ? <div key={i} className="h-px bg-line my-1.5 mx-2" />
-          : it.header ? <div key={i} className="px-3 pt-1.5 pb-1 text-[0.72rem] font-semibold uppercase tracking-wider text-t3">{it.label}</div>
+          : it.header ? <div key={i} className="px-3 pt-1.5 pb-1 text-[0.72rem] font-semibold uppercase tracking-wider text-t3">{tr(it.label)}</div>
           : (
             <button key={i} role="menuitem" disabled={it.disabled}
               onMouseEnter={(e) => { if (it.sub) { const r = e.currentTarget.getBoundingClientRect(); setSub({ i, x: r.right + 2, y: r.top - 6 }); } else setSub(null); }}
@@ -36,7 +37,7 @@ function MenuList({ items, x, y, onClose, depth = 0 }: { items: MenuItem[]; x: n
               className={cx("w-full h-9 px-2.5 rounded-lg flex items-center gap-2.5 text-left text-[0.9rem] transition-colors disabled:opacity-40 disabled:pointer-events-none [&>svg]:size-4 [&>svg]:shrink-0",
                 it.danger ? "text-danger hover:bg-danger/12" : "hover:bg-s3", sub?.i === i && "bg-s3")}>
               {it.icon ?? (it.checked !== undefined ? <span className="size-4 shrink-0" /> : null)}
-              <span className="flex-1 truncate">{it.label}</span>
+              <span className="flex-1 truncate">{tr(it.label)}</span>
               {it.checked && <Check className="text-accent" />}
               {it.hint && <span className="text-t3 text-[0.76rem]">{it.hint}</span>}
               {it.sub && <ChevronRight className="text-t3" />}
@@ -70,9 +71,9 @@ export function Toasts() {
         {toasts.map((t) => (
           <motion.div key={t.id} layout initial={{ opacity: 0, y: 16, scale: 0.94 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, scale: 0.94 }} transition={{ type: "spring", stiffness: 480, damping: 34 }}
             style={{ boxShadow: "var(--shadow)" }} className="pointer-events-auto flex items-center gap-3 h-11 pl-4 pr-2 rounded-full bg-t1 text-bg font-medium text-[0.9rem]">
-            <span className="max-w-[26rem] truncate">{t.text}</span>
-            {t.action ? <button className="h-7.5 px-3 rounded-full bg-bg/15 hover:bg-bg/25 text-[0.84rem] font-semibold" onClick={() => { t.action!.fn(); dismiss(t.id); }}>{t.action.label}</button>
-              : <button aria-label="Dispensar" className="size-7 grid place-items-center rounded-full hover:bg-bg/15" onClick={() => dismiss(t.id)}><X className="size-4" /></button>}
+            <span className="max-w-[26rem] truncate">{tr(t.text)}</span>
+            {t.action ? <button className="h-7.5 px-3 rounded-full bg-bg/15 hover:bg-bg/25 text-[0.84rem] font-semibold" onClick={() => { t.action!.fn(); dismiss(t.id); }}>{tr(t.action.label)}</button>
+              : <button aria-label={tr("Dispensar")} className="size-7 grid place-items-center rounded-full hover:bg-bg/15" onClick={() => dismiss(t.id)}><X className="size-4" /></button>}
           </motion.div>
         ))}
       </AnimatePresence>
@@ -155,7 +156,7 @@ export function CommandPalette() {
           <motion.div initial={{ y: -12, scale: 0.97 }} animate={{ y: 0, scale: 1 }} exit={{ scale: 0.98, opacity: 0 }} transition={{ type: "spring", stiffness: 520, damping: 36 }} style={{ boxShadow: "var(--shadow)" }} className="w-[38rem] max-w-[92vw] rounded-2xl bg-s1 overflow-hidden">
             <div className="flex items-center gap-3 px-5 h-14 border-b border-line">
               <Search className="size-5 text-t3" />
-              <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar músicas, telas, ações e configurações…" className="flex-1 bg-transparent text-[1.02rem] placeholder:text-t3"
+              <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={tr("Buscar músicas, telas, ações e configurações…")} className="flex-1 bg-transparent text-[1.02rem] placeholder:text-t3"
                 onKeyDown={(e) => { if (e.key === "ArrowDown") { e.preventDefault(); setI((v) => Math.min(cmds.length - 1, v + 1)); } else if (e.key === "ArrowUp") { e.preventDefault(); setI((v) => Math.max(0, v - 1)); } else if (e.key === "Enter") run(cmds[i]); else if (e.key === "Escape") setOpen(false); }} />
               <Kbd>Esc</Kbd>
             </div>

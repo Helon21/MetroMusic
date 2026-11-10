@@ -1,24 +1,36 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { Copy, Ellipsis, Languages, MicVocal, Pencil, RefreshCw, Search, Share2, Timer, Type, Image as ImageIcon } from "lucide-react";
-import { getLyrics, translateLine, type LyricLine, type Track } from "../lib/catalog";
+import { useRomanizer } from "../lib/romanizeSettings";
+import { getLyrics, getTrack, type LyricLine, type Track } from "../lib/catalog";
+import { invoke } from "../lib/native";
+import { getSetting, useSetting } from "../store/settings";
 import { copyText, cx } from "../lib/util";
 import { usePlayer } from "../store/player";
-import { useSetting } from "../store/settings";
-import { openDialog, toast, useUI, type MenuItem } from "../store/ui";
+import { nav, openDialog, toast, useUI, type MenuItem } from "../store/ui";
 import { useActiveLine, useSmoothTime } from "../lib/clock";
 import { useRealLyrics } from "../lib/lyricsStore";
 import { Btn, Empty, IconBtn, Spinner } from "./ui";
 
-interface LyrPrefs { offset: Record<string, number>; translated: Record<string, "loading" | "done">; setOffset: (id: string, v: number) => void; translate: (id: string) => void; clearTranslation: (id: string) => void }
+interface LyrPrefs { offset: Record<string, number>; translated: Record<string, "loading" | "done">; translations: Record<string, string[]>; setOffset: (id: string, v: number) => void; translate: (id: string) => void; clearTranslation: (id: string) => void }
 export const useLyr = create<LyrPrefs>((set) => ({
-  offset: {}, translated: {},
+  offset: {}, translated: {}, translations: {},
   setOffset: (id, v) => set((s) => ({ offset: { ...s.offset, [id]: v } })),
   translate: (id) => {
+    const track = getTrack(id); const lines = (track && getLyrics(track)?.lines.map((l) => l.text)) ?? [];
+    if (!lines.length) return void toast("Esta faixa não tem letra para traduzir");
+    if (!getSetting("aiKey")) { toast("Informe a chave da API em Configurações › Tradução por IA"); nav("settings/ai"); return; }
+    const g = (k: string) => getSetting(k);
+    const config = { provider: g("aiProvider"), baseUrl: g("aiBaseUrl"), key: g("aiKey"), model: g("aiModel"), mode: g("aiMode"), target: g("aiTarget"), formality: g("aiFormality"), prompt: g("aiPrompt") };
     set((s) => ({ translated: { ...s.translated, [id]: "loading" } }));
-    setTimeout(() => { set((s) => ({ translated: { ...s.translated, [id]: "done" } })); toast("Letra traduzida"); }, 1400);
+    const fail = (msg: string) => { set((s) => { const t = { ...s.translated }; delete t[id]; return { translated: t }; }); toast(`Não consegui traduzir: ${msg}`); };
+    invoke<string[]>("ai_translate", { config, lines }).then((out) => {
+      if (!out) return fail("a tradução só funciona no app nativo");
+      set((s) => ({ translated: { ...s.translated, [id]: "done" }, translations: { ...s.translations, [id]: out } }));
+      toast(g("aiMode") === "transcribed" ? "Letra transcrita" : "Letra traduzida");
+    }).catch((e) => fail(String(e)));
   },
-  clearTranslation: (id) => set((s) => { const t = { ...s.translated }; delete t[id]; return { translated: t }; }),
+  clearTranslation: (id) => set((s) => { const t = { ...s.translated }, tr = { ...s.translations }; delete t[id]; delete tr[id]; return { translated: t, translations: tr }; }),
 }));
 
 export function lyricsMenu(t: Track): MenuItem[] {
@@ -30,7 +42,7 @@ export function lyricsMenu(t: Track): MenuItem[] {
     { label: "Buscar de novo", icon: <RefreshCw />, onClick: () => toast("Letra atualizada") },
     { divider: true },
     { label: tr === "done" ? "Remover tradução" : "Traduzir com IA", icon: <Languages />, disabled: !ly, onClick: () => (tr === "done" ? L.clearTranslation(t.id) : L.translate(t.id)) },
-    { label: "Romanizar esta faixa", icon: <Type />, disabled: !ly, onClick: () => toast("Esta letra já usa o alfabeto latino") },
+    { label: "Configurar romanização…", icon: <Type />, onClick: () => nav("settings/romanization") },
     { label: "Ajustar sincronia…", icon: <Timer />, disabled: !ly?.synced, onClick: () => openDialog("lyricsOffset", { id: t.id }) },
     { divider: true },
     { label: "Copiar toda a letra", icon: <Copy />, disabled: !ly, onClick: () => { copyText(text); toast("Letra copiada"); } },
@@ -47,7 +59,7 @@ export function LyricsMenuButton({ track, size = 32 }: { track: Track; size?: nu
 }
 
 /** Palavras da linha ativa; só este componente re-renderiza a cada quadro. */
-function ActiveWords({ l, anim, offset }: { l: LyricLine; anim: string; offset: number }) {
+function ActiveWords({ l, anim, offset, rom }: { l: LyricLine; anim: string; offset: number; rom?: (t: string) => string | null }) {
   const pos = useSmoothTime(offset);
   return (
     <>
@@ -60,7 +72,7 @@ function ActiveWords({ l, anim, offset }: { l: LyricLine; anim: string; offset: 
             style={gradient
               ? { backgroundImage: `linear-gradient(to right, var(--t1) ${p * 100}%, color-mix(in oklch, var(--t1) 38%, transparent) ${p * 100 + (anim === "apple" ? 12 : 0)}%)`, WebkitBackgroundClip: "text", backgroundClip: "text", color: "transparent", transform: anim === "apple" && on && !sung ? "translateY(-2px)" : undefined, marginRight: "0.26em" }
               : { opacity: on ? 1 : 0.4, transform: anim === "slide" ? `translateY(${on ? 0 : 5}px)` : undefined, textShadow: anim === "glow" && on && !sung ? "0 0 18px var(--t1)" : undefined, marginRight: "0.26em" }}>
-            {w.w}
+            {rom ? (rom(w.w) ?? w.w) : w.w}
           </span>
         );
       })}
@@ -85,15 +97,21 @@ export function LyricsView({ track, scale = 1, className }: { track: Track; scal
   const lyrics = useMemo(() => getLyrics(track), [track, real.version]);
   const offset = useLyr((s) => s.offset[track.id] ?? 0);
   const tr = useLyr((s) => s.translated[track.id]);
+  const translation = useLyr((s) => s.translations[track.id]);
+  const romAsMain = useSetting<boolean>("romanizeAsMain");
   const size = useSetting<number>("lyricsSize") * scale, spacing = useSetting<number>("lyricsSpacing");
-  const align = useSetting<string>("lyricsPosition"), anim = useSetting<string>("lyricsAnimation");
-  const glow = useSetting<boolean>("lyricsGlow"), blur = useSetting<boolean>("lyricsBlurInactive"), auto = useSetting<boolean>("lyricsAutoScroll");
-  const clickSeek = useSetting<boolean>("lyricsClickSeek"), gaps = useSetting<boolean>("lyricsIntervalIndicator"), agents = useSetting<boolean>("lyricsAgentPositioning");
+  const align = useSetting<string>("lyricsPosition"), animSetting = useSetting<string>("lyricsAnimation");
+  // "Letras MetroMusic" desligado: letra clássica, só a linha ativa em destaque (sem palavra a palavra, desfoque, brilho nem pontos de pausa)
+  const metro = useSetting<boolean>("expMetroLyrics") !== false;
+  const glow = useSetting<boolean>("lyricsGlow") && metro, blur = useSetting<boolean>("lyricsBlurInactive") && metro, auto = useSetting<boolean>("lyricsAutoScroll");
+  const clickSeek = useSetting<boolean>("lyricsClickSeek"), gaps = useSetting<boolean>("lyricsIntervalIndicator") && metro, agents = useSetting<boolean>("lyricsAgentPositioning");
+  const anim = metro ? animSetting : "none";
   const box = useRef<HTMLDivElement>(null);
   const [free, setFree] = useState(false); // usuário rolou manualmente
   const freeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const lines = lyrics?.lines ?? [];
+  const rom = useRomanizer(lines.map((l) => l.text));
   const { active, inGap } = useActiveLine(lines, !!lyrics?.synced, offset);
   const gapTarget = active >= 0 ? lines[active + 1]?.t : lines[0]?.t;
   const gapStart = active >= 0 ? lines[active].end : 0;
@@ -137,12 +155,13 @@ export function LyricsView({ track, scale = 1, className }: { track: Track; scal
                 style={{
                   marginBottom: `${(spacing - 0.6) * 0.8}em`, fontSize: l.bg && agents ? "0.72em" : undefined,
                   opacity: !lyrics.synced ? 0.9 : isActive ? 1 : past ? 0.32 : Math.max(0.22, 0.5 - dist * 0.07),
-                  transform: isActive ? "scale(1)" : "scale(0.94)",
+                  transform: metro ? (isActive ? "scale(1)" : "scale(0.94)") : undefined,
                   filter: blur && lyrics.synced && !isActive && !free ? `blur(${Math.min(3.5, dist * 0.7)}px)` : undefined,
                   textShadow: isActive && glow ? "0 0 28px color-mix(in oklch, var(--t1) 40%, transparent)" : undefined,
                 }}>
-                {isActive && anim !== "none" ? <ActiveWords l={l} anim={anim} offset={offset} /> : l.text}
-                {tr === "done" && <div className="font-medium opacity-70 mt-1" style={{ fontSize: "0.5em", lineHeight: 1.3 }}>{translateLine(l.text)}</div>}
+                {isActive && anim !== "none" ? <ActiveWords l={l} anim={anim} offset={offset} rom={romAsMain ? rom : undefined} /> : (romAsMain ? (rom(l.text) ?? l.text) : l.text)}
+                {(() => { const rl = rom(l.text); return rl ? <div className="font-medium opacity-70 mt-1" style={{ fontSize: "0.55em", lineHeight: 1.3 }}>{romAsMain ? l.text : rl}</div> : null; })()}
+                {tr === "done" && translation?.[i] && <div className="font-medium opacity-70 mt-1" style={{ fontSize: "0.5em", lineHeight: 1.3 }}>{translation[i]}</div>}
               </div>
               {inGap && i === active && gaps && lyrics.synced && gap}
             </div>
@@ -159,14 +178,29 @@ export function LyricsView({ track, scale = 1, className }: { track: Track; scal
   );
 }
 
-/** Linha única da letra atual (usada sob a capa e na barra do player). */
+/** Letra atual sob a capa e na barra do player. Com "Linha de letra suave" mostra a anterior, a atual (com brilho que cresce
+ *  conforme a linha é cantada) e a próxima; desligada, só a linha atual. */
 export function LyricLineNow({ track, className }: { track: Track; className?: string }) {
   const real = useRealLyrics(track);
   const lyrics = useMemo(() => getLyrics(track), [track, real.version]);
   const offset = useLyr((s) => s.offset[track.id] ?? 0);
   const { active } = useActiveLine(lyrics?.lines ?? [], !!lyrics?.synced, offset);
+  const smooth = useSetting<boolean>("expSmoothInline") !== false;
   const l = lyrics?.synced && active >= 0 ? lyrics.lines[active] : null;
   const pos = useSmoothTime(offset, !!l);
-  const line = l && pos < l.end + 1.5 ? l.text : "";
-  return <div key={line} className={cx("truncate animate-[fade_0.4s_ease]", className)} style={{ animation: "none" }}>{line || "♪"}</div>;
+  const rom = useRomanizer(lyrics?.lines.map((x) => x.text) ?? []);
+  const asMain = useSetting<boolean>("romanizeAsMain");
+  const show = (x?: LyricLine) => (x ? (asMain ? (rom(x.text) ?? x.text) : x.text) : "");
+  const line = l && pos < l.end + 1.5 ? show(l) : "";
+  if (!smooth) return <div key={line} className={cx("truncate", className)} style={{ animation: "none" }}>{line || "♪"}</div>;
+  const prev = l ? lyrics!.lines[active - 1] : undefined, next = l ? lyrics!.lines[active + 1] : undefined;
+  const p = l ? Math.min(1, Math.max(0, (pos - l.t) / Math.max(0.3, l.end - l.t))) : 0;
+  const row = "truncate transition-[opacity,filter,transform] duration-500 ease-out";
+  return (
+    <div className={cx(className?.replace(/\bh-7\b/, ""), "flex flex-col gap-0.5 min-h-[5.4rem] justify-center")} data-smooth-inline>
+      <div className={cx(row, "text-[0.82em] opacity-40")} style={{ filter: "blur(0.6px)" }}>{show(prev) || "\u00A0"}</div>
+      <div key={line} className={cx(row, "text-t1")} style={{ textShadow: line ? `0 0 ${Math.round(6 + p * 16)}px color-mix(in oklch, var(--t1) ${Math.round(18 + p * 32)}%, transparent)` : undefined }}>{line || "♪"}</div>
+      <div className={cx(row, "text-[0.82em] opacity-40")} style={{ filter: "blur(0.6px)" }}>{show(next) || "\u00A0"}</div>
+    </div>
+  );
 }

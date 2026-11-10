@@ -64,7 +64,7 @@ export async function removeFromAccountPlaylist(p: AccountProvider, playlistId: 
 }
 
 /** O item está na biblioteca da conta agora? (leitura real; o YouTube Music pode levar alguns segundos para refletir) */
-async function inLibrary(p: AccountProvider, kind: "album" | "playlist" | "artist", id: string): Promise<boolean> {
+export async function inLibrary(p: AccountProvider, kind: "album" | "playlist" | "artist", id: string): Promise<boolean> {
   const list = kind === "album" ? "albums" : kind === "artist" ? "artists" : "playlists";
   const page = await (p === "spotify" ? engine.spLibrary(list) : engine.ytLibrary(list));
   const bare = (x: string) => x.replace(/^VL/, "");

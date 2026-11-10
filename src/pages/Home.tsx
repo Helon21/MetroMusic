@@ -113,20 +113,6 @@ function Community() {
   );
 }
 
-function DeezerNotice() {
-  const seen = useSetting<boolean>("deezerNoticeSeen"), account = useLib((s) => s.accounts.deezer);
-  if (seen || account) return null;
-  return (
-    <div className="relative mb-8 p-5 rounded-2xl bg-s1 flex items-center gap-4 overflow-hidden">
-      <div className="absolute -left-10 -top-16 size-52 rounded-full blur-3xl opacity-25" style={{ background: "oklch(0.7 0.18 300)" }} />
-      <BrandTile id="deezer" size={48} className="relative rounded-xl" />
-      <div className="relative flex-1 min-w-0"><div className="flex items-center gap-2"><span className="font-semibold">Entre no Deezer</span><Badge tone="accent">Novo</Badge></div><div className="text-t3 text-[0.88rem]">Agora o MetroMusic toca direto da sua conta do Deezer: reprodução mais confiável, FLAC e letras palavra a palavra.</div></div>
-      <Btn variant="primary" className="relative" onClick={() => openDialog("login", { service: "deezer" })}>Entrar no Deezer</Btn>
-      <IconBtn label="Dispensar" size={32} className="relative" onClick={() => setSetting("deezerNoticeSeen", true)}><X /></IconBtn>
-    </div>
-  );
-}
-
 const A = (ids: { id: string }[], type: Item["type"]): Item[] => ids.map((x) => ({ type, id: x.id }));
 const NEEDS_LOGIN: Partial<Record<SourceId, string>> = { spotify: "spotify", tidal: "tidal", soundcloud: "soundcloud" };
 
@@ -237,7 +223,6 @@ export default function Home() {
           <ShelfCards title="Álbuns" items={A(sample(albums, 10, mood.hue + 2), "album")} />
         </motion.div>
       ) : (<>
-        <DeezerNotice />
         {showWrapped && source === "youtube" && (
           <motion.button whileHover={{ scale: 1.005 }} whileTap={{ scale: 0.995 }} onClick={() => nav("wrapped")} className="relative w-full h-28 mb-9 rounded-2xl overflow-hidden text-left flex items-center gap-5 px-7">
             <div className="absolute inset-0" style={{ background: "linear-gradient(110deg, oklch(0.55 0.2 330), oklch(0.5 0.2 280) 45%, oklch(0.6 0.17 200))" }} />

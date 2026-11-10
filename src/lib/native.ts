@@ -43,3 +43,28 @@ export async function closeThisWindow() {
   if (isTauri) return (await currentWindow()).close();
   window.close();
 }
+
+// ───────── Seletores de arquivo e pasta (diálogos nativos). Fora do Tauri devolvem `null`.
+/** Endereço que a interface usa para mostrar um arquivo do disco (capas extraídas, imagens em cache). */
+export function fileUrl(path: string): string {
+  const internals = (window as any).__TAURI_INTERNALS__;
+  return isTauri && internals?.convertFileSrc ? internals.convertFileSrc(path, "asset") : path;
+}
+
+export async function pickSaveFile(defaultPath: string, filters?: { name: string; extensions: string[] }[]): Promise<string | null> {
+  if (!isTauri) return null;
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  return save({ defaultPath, filters });
+}
+export async function pickOpenFile(filters?: { name: string; extensions: string[] }[]): Promise<string | null> {
+  if (!isTauri) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const r = await open({ multiple: false, directory: false, filters });
+  return typeof r === "string" ? r : null;
+}
+export async function pickFolder(): Promise<string | null> {
+  if (!isTauri) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const r = await open({ multiple: false, directory: true });
+  return typeof r === "string" ? r : null;
+}

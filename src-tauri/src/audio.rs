@@ -84,15 +84,34 @@ struct Slot {
     space: Condvar,
     /// Loudness da faixa deste slot (LUFS, f64 em bits; NaN = ainda desconhecido).
     lufs: AtomicU64,
+    /// Bitrate medido do que foi decodificado há pouco (bits/s; 0 = ainda sem medida).
+    live_bitrate: AtomicU32,
+}
+
+/// Mede o bitrate real do arquivo: bytes lidos / tempo de áudio, em janelas de 1 s (útil em FLAC e outros de taxa variável).
+struct LiveRate { bytes: u64, secs: f64 }
+impl LiveRate {
+    fn new() -> Self { LiveRate { bytes: 0, secs: 0.0 } }
+    /// Soma um pacote (`bytes` do arquivo, `frames` de áudio na taxa `src_rate`). Devolve bits/s ao fechar cada janela.
+    fn push(&mut self, bytes: usize, frames: usize, src_rate: u32) -> Option<u32> {
+        if src_rate == 0 { return None; }
+        self.bytes += bytes as u64;
+        self.secs += frames as f64 / src_rate as f64;
+        if self.secs < 1.0 { return None; }
+        let bps = (self.bytes as f64 * 8.0 / self.secs).round() as u32;
+        *self = LiveRate::new();
+        Some(bps)
+    }
 }
 
 impl Slot {
-    fn new() -> Slot { Slot { buf: Mutex::new(Buffer { data: VecDeque::new(), eof: false }), space: Condvar::new(), lufs: AtomicU64::new(f64::NAN.to_bits()) } }
+    fn new() -> Slot { Slot { buf: Mutex::new(Buffer { data: VecDeque::new(), eof: false }), space: Condvar::new(), lufs: AtomicU64::new(f64::NAN.to_bits()), live_bitrate: AtomicU32::new(0) } }
     fn reset(&self, lufs: Option<f64>) {
         let mut b = self.buf.lock();
         b.data.clear();
         b.eof = false;
         self.lufs.store(lufs.unwrap_or(f64::NAN).to_bits(), Ordering::Relaxed);
+        self.live_bitrate.store(0, Ordering::Relaxed);
     }
 }
 
@@ -683,7 +702,7 @@ fn engine_thread(sh: Arc<Shared>, rx: Receiver<Cmd>, emit: Emit, ready: std::syn
         if playing && last_emit.elapsed() >= POSITION_EVERY {
             last_emit = Instant::now();
             let pos = position_of(&sh, sh.played_frames.load(Ordering::Relaxed));
-            emit("audio:position", json!({ "token": a.meta.token, "position": pos, "duration": a.duration }));
+            emit("audio:position", json!({ "token": a.meta.token, "position": pos, "duration": a.duration, "liveBitrate": sh.slots[sh.cur.load(Ordering::Relaxed)].live_bitrate.load(Ordering::Relaxed) }));
         }
     }
 }
@@ -749,6 +768,7 @@ fn decode_loop(
     let (mut eof, mut skip_until): (bool, Option<f64>) = (false, None);
     let mut queued: std::collections::VecDeque<symphonia::core::formats::Packet> = Default::default();
     let mut meter = measure.then(|| Meter::new(rate as f64));
+    let mut live = LiveRate::new();
 
     // Posiciona em `t`: reabre o arquivo, pula pacotes e zera o buffer de saída.
     macro_rules! reposition {
@@ -809,6 +829,7 @@ fn decode_loop(
             Err(e) => return Err(format!("decodificação: {e}")),
         };
         let spec = *decoded.spec();
+        if let Some(bps) = live.push(packet.buf().len(), decoded.frames(), src.src_rate) { me.live_bitrate.store(bps, Ordering::Relaxed); }
         if sbuf.as_ref().map_or(true, |s| s.capacity() < decoded.capacity() * spec.channels.count()) {
             sbuf = Some(SampleBuffer::<f32>::new(decoded.capacity() as u64, spec));
         }
@@ -843,6 +864,22 @@ fn decode_loop(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bitrate_ao_vivo_por_janela_de_um_segundo() {
+        let mut r = super::LiveRate::new();
+        // 44,1 kHz: 4096 quadros por pacote; 10 pacotes passam de 0,9 s, 11 passam de 1 s
+        for _ in 0..10 { assert_eq!(r.push(10_000, 4096, 44_100), None); }
+        let bps = r.push(10_000, 4096, 44_100).expect("fechou a janela");
+        let esperado = (110_000.0 * 8.0 / (11.0 * 4096.0 / 44_100.0)) as u32;
+        assert!((bps as i64 - esperado as i64).abs() < 5, "{bps} vs {esperado}");
+        // a janela recomeça do zero e uma faixa mais densa dá uma taxa maior
+        let mut r2 = super::LiveRate::new();
+        let maior = (0..11).filter_map(|_| r2.push(30_000, 4096, 44_100)).next().unwrap();
+        assert!(maior > bps * 2);
+        assert_eq!(super::LiveRate::new().push(1, 1, 0), None);
+    }
+
+
     use super::*;
 
     fn sine(freq: f32, amp: f32, fs: f32, secs: f32) -> Vec<f32> {

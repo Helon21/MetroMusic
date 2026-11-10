@@ -99,12 +99,13 @@ impl Player {
     async fn start_track(self: &Arc<Self>, token: u64, track: TrackInfo, start: f64, autoplay: bool, order: Vec<String>) -> Res<()> {
         let stream = providers::resolve(&track, &order).await?;
         if self.play_gen.load(Ordering::SeqCst) != token { return Ok(()); }
-        let entry = self.cache.entry_for(&stream);
+        let local = stream.source == "local";
+        let entry = if local { self.cache.external_entry(&stream) } else { self.cache.entry_for(&stream) };
         entry.touch();
         let (t, o) = (track.clone(), order.clone());
         let refresh: Refresh = Arc::new(move || { let (t, o) = (t.clone(), o.clone()); Box::pin(async move { providers::invalidate(&t.provider, &t.id); providers::resolve(&t, &o).await }) });
         let (source, codec, bitrate, loudness) = (stream.source.clone(), stream.codec.clone(), stream.bitrate, stream.loudness_lufs);
-        self.cache.fetch(&entry, stream, FULL, Some(refresh));
+        if !local { self.cache.fetch(&entry, stream, FULL, Some(refresh)); }
         entry.wait_ready(START_BYTES, START_TIMEOUT).await?;
         if self.play_gen.load(Ordering::SeqCst) != token { return Ok(()); }
 
@@ -167,12 +168,13 @@ impl Player {
         let stale = || self.next_gen.load(Ordering::SeqCst) != gen;
         let stream = providers::resolve(&track, &order).await?;
         if stale() { return Ok(()); }
-        let entry = self.cache.entry_for(&stream);
+        let local = stream.source == "local";
+        let entry = if local { self.cache.external_entry(&stream) } else { self.cache.entry_for(&stream) };
         entry.touch();
         let (t, o) = (track.clone(), order.clone());
         let refresh: Refresh = Arc::new(move || { let (t, o) = (t.clone(), o.clone()); Box::pin(async move { providers::invalidate(&t.provider, &t.id); providers::resolve(&t, &o).await }) });
         let (source, codec, bitrate, loudness) = (stream.source.clone(), stream.codec.clone(), stream.bitrate, stream.loudness_lufs);
-        self.cache.fetch(&entry, stream, FULL, Some(refresh));
+        if !local { self.cache.fetch(&entry, stream, FULL, Some(refresh)); }
         entry.wait_ready(START_BYTES, START_TIMEOUT).await?;
         if stale() { return Ok(()); }
         let cancel = Arc::new(AtomicBool::new(false));

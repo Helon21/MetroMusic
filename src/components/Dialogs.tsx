@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence } from "motion/react";
 import { AudioLines, Cast, Check, Copy, Download, FileSpreadsheet, FileText, Link, ListMusic, LogIn, Minus, Monitor, Plus, QrCode, Search, Send, Speaker, Tv, Upload } from "lucide-react";
-import { albumOf, artistOf, getArtist, getLyrics, getTrack, sample, songs, SOURCES, sourceName, type SourceId } from "../lib/catalog";
+import { albumOf, artistOf, getArtist, getLyrics, getTrack, registerTrack, sample, songs, SOURCES, sourceName, type ExtInfo, type SourceId } from "../lib/catalog";
+import { guessColumns, parseCsv, parseM3u, rowsToItems, type ImportItem } from "../lib/importers";
+import { parseMusicLink } from "../lib/links";
+import { localExt } from "../lib/local";
 import { coverBg } from "./ui";
 import { copyText, cx, fmtCount, fmtTime, norm } from "../lib/util";
 import { useLib } from "../store/library";
@@ -9,16 +12,19 @@ import { usePlayer } from "../store/player";
 import { BrandTile, SourceIcon, type BrandId } from "../lib/brands";
 import { cancelLogin, loginCookie, loginWeb, logout, useYt } from "../lib/account";
 import { createAccountPlaylist, notifyRemoteChanged } from "../lib/accountPlaylists";
-import { engine } from "../lib/engine";
+import { engine, type SourceCandidate } from "../lib/engine";
 import { loginLastfm, useLastfm } from "../lib/lastfm";
 import { cancelScLogin, loginScToken, loginScWeb, useSc } from "../lib/soundcloud";
 import { cancelSpLogin, loginSp, loginSpCookie, useSp } from "../lib/spotify";
-import { isTauri, toggleMiniWindow } from "../lib/native";
+import { invoke, isTauri, onEvent, pickOpenFile, toggleMiniWindow } from "../lib/native";
 import { getSetting, setSetting, useSetting } from "../store/settings";
-import { nav, toast, useUI } from "../store/ui";
+import { nav, openDialog, toast, useUI } from "../store/ui";
+import { useDiscord } from "../lib/discord";
+import { installUpdate, skipVersion, useUpdate } from "../lib/updater";
+import { fmtBytes, parseNotes } from "../lib/releaseNotes";
 import { useLyr } from "./Lyrics";
 import { ConfirmFooter } from "./overlays";
-import { Btn, Checkbox, Cover, IconBtn, Kbd, Modal, Range, Select, Spinner, Switch, TextField } from "./ui";
+import { Badge, Btn, Checkbox, Cover, IconBtn, Kbd, Modal, Range, Select, Spinner, Switch, TextField } from "./ui";
 
 type P = { props: any; close: () => void };
 const Field = ({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) => (
@@ -114,23 +120,46 @@ function Share({ props, close }: P) {
 function Source({ props, close }: P) {
   const t = getTrack(props.id)!;
   const override = usePlayer((s) => s.sourceOverride[t.id]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => { const x = setTimeout(() => setLoading(false), 700); return () => clearTimeout(x); }, []);
-  const matches = useMemo(() => (["deezer", "tidal", "qobuz", "youtube", "soundcloud", "offline"] as SourceId[]).map((id, i) => ({ id, q: ["FLAC · 16-bit / 44,1 kHz", "Hi-Res · 24-bit / 96 kHz", "Hi-Res · 24-bit / 192 kHz", "Opus · 160 kbps", "AAC · 160 kbps", "Arquivo baixado"][i], conf: [98, 97, 95, 99, 71, 100][i], ms: [182, 240, 310, 95, 420, 2][i] })).filter((m) => m.id !== "offline" || useLib.getState().downloads[t.id] >= 1), [t.id]);
-  const set = (id: SourceId | null) => { usePlayer.getState().setSource(t.id, id); toast("Fonte de áudio atualizada"); close(); };
+  const current = override ?? t.ext;
+  const [list, setList] = useState<SourceCandidate[] | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let dead = false;
+    if (!t.ext || !isTauri) { setList([]); return; }
+    engine.sourceCandidates(t.ext).then((r) => !dead && setList(r ?? [])).catch((e) => { if (!dead) { setError(String(e)); setList([]); } });
+    return () => { dead = true; };
+  }, [t.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const set = (e: ExtInfo | null) => { usePlayer.getState().setSource(t.id, e); toast("Fonte de áudio atualizada"); close(); };
+  // agrupa por provedor, mantendo a ordem em que o backend devolveu
+  const groups = (list ?? []).reduce<{ provider: string; ms: number; items: SourceCandidate[] }[]>((acc, c) => {
+    const g = acc.find((x) => x.provider === c.track.provider);
+    if (g) g.items.push(c); else acc.push({ provider: c.track.provider, ms: c.ms, items: [c] });
+    return acc;
+  }, []);
   return (
-    <Modal title="Escolher fonte de áudio" subtitle={`${t.title} · ${artistOf(t)}`} width={500} onClose={close}>
+    <Modal title="Escolher fonte de áudio" subtitle={`${t.title} · ${artistOf(t)}`} width={520} onClose={close}>
       <button onClick={() => set(null)} className={cx("w-full flex items-center gap-3 p-3.5 rounded-xl text-left mb-2 transition-colors", !override ? "bg-accent-soft" : "bg-s2 hover:bg-s3")}>
         <AudioLines className="size-5 text-accent" /><div className="flex-1"><div className="font-medium">Automática</div><div className="text-t3 text-[0.82rem]">Usa a ordem dos provedores e a lógica de correspondência. Agora: {sourceName(t.provider)}</div></div>{!override && <Check className="size-5 text-accent" />}
       </button>
-      {loading ? <div className="grid place-items-center h-40 text-t3"><Spinner className="size-6" /></div> : matches.map((m) => (
-        <button key={m.id} onClick={() => set(m.id)} className={cx("w-full flex items-center gap-3 p-3 rounded-xl text-left transition-colors", override === m.id ? "bg-accent-soft" : "hover:bg-s2")}>
-          <SourceIcon id={m.id} size={22} className="mx-0.5" />
-          <div className="flex-1 min-w-0"><div className="font-medium">{sourceName(m.id)}</div><div className="text-t3 text-[0.82rem]">{m.q}</div></div>
-          <div className="text-right text-[0.78rem] tnum"><div className={m.conf > 90 ? "text-ok" : "text-warn"}>{m.conf}% de correspondência</div><div className="text-t3">{m.ms} ms</div></div>
-          {override === m.id && <Check className="size-5 text-accent" />}
-        </button>
-      ))}
+      {list === null ? <div className="grid place-items-center h-40 text-t3"><Spinner className="size-6" /></div>
+        : error ? <div className="text-danger text-[0.88rem] p-3">Não consegui procurar as fontes: {error}</div>
+        : !t.ext || !isTauri ? <div className="text-t3 text-[0.88rem] p-3">Esta faixa é de demonstração: só faixas reais têm fontes para escolher.</div>
+        : !groups.length ? <div className="text-t3 text-[0.88rem] p-3">Nenhum provedor encontrou esta música com certeza.</div>
+        : groups.map((g) => (
+          <div key={g.provider} className="mb-1">
+            <div className="flex items-center gap-2 px-1 pt-2 pb-1 text-[0.74rem] font-semibold uppercase tracking-wider text-t3"><SourceIcon id={g.provider as SourceId} size={16} /><span className="flex-1">{sourceName(g.provider as SourceId)}</span><span className="tnum normal-case font-normal">{g.ms} ms</span></div>
+            {g.items.map((c) => {
+              const on = current?.provider === c.track.provider && current.id === c.track.id;
+              return (
+                <button key={c.track.id} onClick={() => set(c.track.provider === t.ext!.provider && c.track.id === t.ext!.id ? null : c.track)} className={cx("w-full flex items-center gap-3 p-2.5 rounded-xl text-left transition-colors", on ? "bg-accent-soft" : "hover:bg-s2")}>
+                  {c.track.artworkUrl ? <img src={c.track.artworkUrl} alt="" referrerPolicy="no-referrer" className="size-10 rounded-md object-cover bg-s3" /> : <div className="size-10 rounded-md bg-s3" />}
+                  <div className="flex-1 min-w-0"><div className="font-medium truncate">{c.track.title}</div><div className="text-t3 text-[0.82rem] truncate">{c.track.artists.join(", ")}{c.track.durationMs ? ` · ${fmtTime(c.track.durationMs / 1000)}` : ""}</div></div>
+                  {on && <Check className="size-5 text-accent shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        ))}
       <div className="text-t3 text-[0.8rem] mt-3">A escolha vale só para esta faixa. A ordem geral fica em <button className="underline hover:text-t1" onClick={() => { close(); nav("settings/provider_order"); }}>Configurações › Ordem dos provedores</button>.</div>
     </Modal>
   );
@@ -233,35 +262,114 @@ function Mini({ close }: P) {
   );
 }
 
+interface ImportResult { name: string; ids: string[]; missing: string[]; total: number }
+
+/** Importar playlist: link (YouTube Music/Spotify), arquivo M3U ou CSV. Procura cada música nos provedores. */
 function Import({ close }: P) {
-  const [step, setStep] = useState<"pick" | "csv" | "run">("pick");
-  const [url, setUrl] = useState(""); const [header, setHeader] = useState(true); const [cols, setCols] = useState({ artist: "1", title: "0", url: "none" });
-  const [pct, setPct] = useState(0);
-  const run = (name: string) => { setStep("run"); let p = 0; const t = setInterval(() => { p += 9 + Math.random() * 14; setPct(Math.min(100, p)); if (p >= 100) { clearInterval(t); const id = useLib.getState().createPlaylist(name, sample(songs, 18, Date.now()).map((s) => s.id)); close(); toast("Playlist importada", { label: "Abrir", fn: () => nav(`playlist/${id}`) }); } }, 220); };
-  const sampleRows = [["Título", "Artista", "Álbum", "URL"], ["Mar Azul", "Ravi Solano", "Deriva", "https://…"], ["Órbita", "Lume Aurora", "Vertigem", "https://…"], ["Lado B", "Os Satélites", "Contramão", ""]];
-  const colOpts: [string, string][] = sampleRows[0].map((h, i) => [String(i), header ? h : `Coluna ${i + 1}`]);
-  if (step === "run") return <Modal title="Importando playlist…" width={420} onClose={close}><div className="h-2 rounded-full bg-s3 overflow-hidden my-4"><div className="h-full bg-accent transition-[width] duration-200" style={{ width: `${pct}%` }} /></div><div className="text-t3 text-[0.86rem]">Procurando correspondências no catálogo… {Math.round(pct)}%</div></Modal>;
-  if (step === "csv") return (
-    <Modal title="Mapear colunas do CSV" subtitle="spotify-export.csv · 3 linhas de amostra" width={560} onClose={close} footer={<><Btn variant="ghost" onClick={() => setStep("pick")}>Voltar</Btn><Btn variant="primary" onClick={() => run("Importada do CSV")}>Continuar</Btn></>}>
-      <div className="flex items-center gap-3 mb-4"><Checkbox on={header} onChange={setHeader} /><span>A primeira linha é o cabeçalho</span></div>
-      <div className="rounded-xl bg-s2 overflow-hidden mb-5 text-[0.84rem]">{sampleRows.slice(header ? 0 : 1).map((r, i) => <div key={i} className={cx("grid grid-cols-4 gap-2 px-3 h-9 items-center", i === 0 && header ? "font-semibold bg-s3" : "border-t border-line text-t2")}>{r.map((c, k) => <span key={k} className="truncate">{c}</span>)}</div>)}</div>
-      <div className="grid grid-cols-3 gap-3">
-        <Field label="Título da música"><Select className="w-full" value={cols.title} onChange={(v) => setCols({ ...cols, title: v })} options={colOpts} /></Field>
-        <Field label="Nome do artista"><Select className="w-full" value={cols.artist} onChange={(v) => setCols({ ...cols, artist: v })} options={colOpts} /></Field>
-        <Field label="URL (opcional)"><Select className="w-full" value={cols.url} onChange={(v) => setCols({ ...cols, url: v })} options={[["none", "Nenhuma"], ...colOpts]} /></Field>
-      </div>
-    </Modal>
-  );
+  const [step, setStep] = useState<"pick" | "csv" | "run" | "done">("pick");
+  const [url, setUrl] = useState(""); const [busy, setBusy] = useState("");
+  const [csv, setCsv] = useState<{ name: string; rows: string[][] } | null>(null);
+  const [header, setHeader] = useState(true); const [cols, setCols] = useState({ title: 0, artist: 1, url: -1 });
+  const [progress, setProgress] = useState({ done: 0, total: 0 }); const [result, setResult] = useState<ImportResult | null>(null);
+  const [error, setError] = useState("");
+  const native = isTauri;
+
+  useEffect(() => { let off: (() => void) | undefined; onEvent<{ done: number; total: number }>("import:progress", (p) => setProgress(p)).then((u) => { off = u; }); return () => off?.(); }, []);
+
+  const finish = (name: string, ids: string[], missing: string[], total: number) => {
+    if (!ids.length) { setError(total ? "Não achei nenhuma dessas músicas para tocar." : "O arquivo não tem músicas."); setStep("pick"); return; }
+    setResult({ name, ids, missing, total }); setStep("done");
+  };
+  const stem = (path: string) => (path.split(/[\\/]/).pop() ?? "Importada").replace(/\.[^.]+$/, "");
+
+  /** Procura online o que não é arquivo local e junta na ordem original. */
+  const resolveItems = async (name: string, items: ImportItem[]) => {
+    setStep("run"); setError(""); setProgress({ done: 0, total: items.length });
+    const local = items.map((it) => it.path && !/^https?:/i.test(it.path) ? it.path : null);
+    const probes = await engine.localProbe(local.filter((p): p is string => !!p), getSetting("preferEmbeddedArt") !== false) ?? [];
+    let k = 0; const byIndex = local.map((p) => (p ? probes[k++] : null));
+    const online = items.map((it, i) => (byIndex[i] ? null : it));
+    const toFind = online.filter((x): x is ImportItem => !!x);
+    const found = toFind.length ? await engine.importMatch(toFind.map((x) => ({ title: x.title, artist: x.artist, durationSec: x.durationSec }))) ?? [] : [];
+    let f = 0; const ids: string[] = [], missing: string[] = [];
+    items.forEach((it, i) => {
+      const lt = byIndex[i];
+      const ext = lt ? localExt(lt) : online[i] ? found[f++] : null;
+      if (ext) ids.push(registerTrack(ext, !lt).id); else missing.push(it.artist ? `${it.artist} - ${it.title}` : it.title);
+    });
+    finish(name, [...new Set(ids)], missing, items.length);
+  };
+
+  const fromFile = async (kind: "m3u" | "csv") => {
+    setError(""); setBusy(kind);
+    try {
+      const path = await pickOpenFile(kind === "m3u" ? [{ name: "Playlist M3U", extensions: ["m3u", "m3u8"] }] : [{ name: "CSV", extensions: ["csv", "tsv", "txt"] }]);
+      if (!path) return;
+      const text = await invoke<string>("file_read_text", { path });
+      if (kind === "m3u") await resolveItems(stem(path), parseM3u(text ?? ""));
+      else {
+        const rows = parseCsv(text ?? "");
+        if (rows.length < 2) { setError("O CSV está vazio."); return; }
+        const g = guessColumns(rows[0]);
+        setCols({ title: g.title >= 0 ? g.title : 0, artist: g.artist >= 0 ? g.artist : Math.min(1, rows[0].length - 1), url: g.url });
+        setHeader(g.title >= 0 || g.artist >= 0 || rows[0].every((c) => isNaN(Number(c))));
+        setCsv({ name: stem(path), rows }); setStep("csv");
+      }
+    } catch (e) { setError(`Não consegui ler o arquivo: ${String(e).replace(/^Error: /, "")}`); setStep("pick"); }
+    finally { setBusy(""); }
+  };
+
+  const fromLink = async () => {
+    setError(""); setBusy("link");
+    try {
+      const link = parseMusicLink(url);
+      if (!link || !(link.kind === "yt-playlist" || link.kind === "sp-playlist" || link.kind === "yt-album" || link.kind === "sp-album")) { setError("Use um link de playlist ou álbum do YouTube Music ou do Spotify."); return; }
+      const id = link.kind === "yt-playlist" ? `VL${link.id}` : link.kind === "yt-album" ? link.id : `sp:${link.kind === "sp-album" ? "album" : "playlist"}:${link.id}`;
+      const page = await engine.page(id);
+      const tracks = page?.tracks ?? [];
+      finish(page?.title || "Importada do link", tracks.map((t) => registerTrack(t).id), [], tracks.length);
+    } catch (e) { setError(`Não consegui abrir o link: ${String(e).replace(/^Error: /, "")}`); }
+    finally { setBusy(""); }
+  };
+
+  if (step === "run") return <Modal title="Importando playlist…" width={420} onClose={close}><div className="h-2 rounded-full bg-s3 overflow-hidden my-4"><div className="h-full bg-accent transition-[width] duration-200" style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 5}%` }} /></div><div className="text-t3 text-[0.86rem]">Procurando as músicas… {progress.done} de {progress.total}</div></Modal>;
+  if (step === "done" && result) {
+    const open = () => { const id = useLib.getState().createPlaylist(result.name, result.ids); close(); toast(`Playlist criada com ${result.ids.length} músicas`, { label: "Abrir", fn: () => nav(`playlist/${id}`) }); };
+    return (
+      <Modal title="Importação concluída" subtitle={`${result.ids.length} de ${result.total} músicas encontradas`} width={520} onClose={close} footer={<><Btn variant="ghost" onClick={close}>Cancelar</Btn><Btn variant="primary" onClick={open}>Criar playlist “{result.name}”</Btn></>}>
+        {result.missing.length > 0 ? <>
+          <div className="text-t2 text-[0.88rem] mb-2">Não achei {result.missing.length} {result.missing.length === 1 ? "música" : "músicas"} com certeza (ficam de fora, para não tocar a errada):</div>
+          <div className="rounded-xl bg-s2 max-h-48 overflow-y-auto text-[0.84rem] text-t3 divide-y divide-line">{result.missing.slice(0, 50).map((m, i) => <div key={i} className="px-3 py-1.5 truncate">{m}</div>)}{result.missing.length > 50 && <div className="px-3 py-1.5">e mais {result.missing.length - 50}…</div>}</div>
+        </> : <div className="text-ok text-[0.9rem]">Todas as músicas foram encontradas.</div>}
+      </Modal>
+    );
+  }
+  if (step === "csv" && csv) {
+    const colOpts: [string, string][] = csv.rows[0].map((h, i) => [String(i), header ? (h || `Coluna ${i + 1}`) : `Coluna ${i + 1}`]);
+    const preview = csv.rows.slice(0, header ? 4 : 3);
+    return (
+      <Modal title="Mapear colunas do CSV" subtitle={`${csv.name} · ${csv.rows.length - (header ? 1 : 0)} linhas`} width={600} onClose={close} footer={<><Btn variant="ghost" onClick={() => setStep("pick")}>Voltar</Btn><Btn variant="primary" onClick={() => resolveItems(csv.name, rowsToItems(csv.rows, header, cols))}>Continuar</Btn></>}>
+        <div className="flex items-center gap-3 mb-4"><Checkbox on={header} onChange={setHeader} /><span>A primeira linha é o cabeçalho</span></div>
+        <div className="rounded-xl bg-s2 overflow-x-auto mb-5 text-[0.84rem]">{preview.map((r, i) => <div key={i} className={cx("flex gap-3 px-3 h-9 items-center", i === 0 && header ? "font-semibold bg-s3" : "border-t border-line text-t2")}>{r.slice(0, 5).map((c, k) => <span key={k} className="w-32 shrink-0 truncate">{c}</span>)}</div>)}</div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Título da música"><Select className="w-full" value={String(cols.title)} onChange={(v) => setCols({ ...cols, title: Number(v) })} options={colOpts} /></Field>
+          <Field label="Nome do artista"><Select className="w-full" value={String(cols.artist)} onChange={(v) => setCols({ ...cols, artist: Number(v) })} options={[["-1", "Nenhum"], ...colOpts]} /></Field>
+        </div>
+      </Modal>
+    );
+  }
   return (
     <Modal title="Importar playlist" subtitle="Traga suas playlists de outros serviços ou de arquivos" width={520} onClose={close}>
-      <Field label="Link de playlist" hint="YouTube Music, Spotify, TIDAL, Deezer ou SoundCloud">
-        <div className="flex gap-2"><TextField className="flex-1" value={url} onChange={setUrl} placeholder="https://…" icon={<Link />} onEnter={() => url && run("Importada do link")} /><Btn variant="primary" disabled={!url.trim()} onClick={() => run("Importada do link")}>Importar</Btn></div>
+      {!native && <div className="p-3 rounded-xl bg-warn/12 text-warn text-[0.86rem] mb-4">A importação precisa do app nativo.</div>}
+      <Field label="Link de playlist ou álbum" hint="YouTube Music ou Spotify">
+        <div className="flex gap-2"><TextField className="flex-1" value={url} onChange={setUrl} placeholder="https://…" icon={<Link />} onEnter={() => url && native && fromLink()} /><Btn variant="primary" disabled={!native || !url.trim() || !!busy} onClick={fromLink}>{busy === "link" ? "Abrindo…" : "Importar"}</Btn></div>
       </Field>
       <div className="grid grid-cols-2 gap-3">
-        <button onClick={() => run("Importada do M3U")} className="p-4 rounded-xl bg-s2 hover:bg-s3 text-left transition-colors"><FileText className="size-6 text-accent mb-2" /><div className="font-semibold">Arquivo M3U</div><div className="text-t3 text-[0.82rem]">Playlists exportadas de outros players.</div></button>
-        <button onClick={() => setStep("csv")} className="p-4 rounded-xl bg-s2 hover:bg-s3 text-left transition-colors"><FileSpreadsheet className="size-6 text-accent mb-2" /><div className="font-semibold">Arquivo CSV</div><div className="text-t3 text-[0.82rem]">Exportações do Spotify, Apple Music e similares.</div></button>
+        <button disabled={!native || !!busy} onClick={() => fromFile("m3u")} className="p-4 rounded-xl bg-s2 hover:bg-s3 text-left transition-colors disabled:opacity-50"><FileText className="size-6 text-accent mb-2" /><div className="font-semibold">Arquivo M3U</div><div className="text-t3 text-[0.82rem]">Playlists exportadas de outros players.</div></button>
+        <button disabled={!native || !!busy} onClick={() => fromFile("csv")} className="p-4 rounded-xl bg-s2 hover:bg-s3 text-left transition-colors disabled:opacity-50"><FileSpreadsheet className="size-6 text-accent mb-2" /><div className="font-semibold">Arquivo CSV</div><div className="text-t3 text-[0.82rem]">Exportações do Spotify, Apple Music e similares.</div></button>
       </div>
-      <div className="text-t3 text-[0.8rem] mt-4">Nesta prévia a importação é simulada com músicas do catálogo de demonstração.</div>
+      {error && <div className="text-danger text-[0.86rem] mt-3">{error}</div>}
+      <div className="text-t3 text-[0.8rem] mt-4">Cada música é procurada nos provedores que tocam por inteiro. As que não são achadas com certeza ficam de fora.</div>
     </Modal>
   );
 }
@@ -371,6 +479,34 @@ function LastfmLogin({ close }: P) {
     </Modal>
   );
 }
+/** Primeiro uso: mostra como conectar os serviços. Tudo é opcional e dá para fazer depois em Configurações › Integrações. */
+function Welcome({ close }: P) {
+  const accounts = useLib((s) => s.accounts), discord = useDiscord((s) => s.state);
+  const done = () => { setSetting("onboardingSeen", true); close(); };
+  const rows: { id: BrandId; name: string; text: string; action: ReactNode }[] = [
+    { id: "youtube", name: "YouTube Music", text: "É a fonte principal de áudio. Conectando, o Início, as playlists e as curtidas vêm da sua conta.",
+      action: accounts.youtube ? <Badge tone="accent"><Check />Conectado</Badge> : <Btn size="sm" variant="primary" onClick={() => openDialog("login", { service: "youtube", from: "welcome" })}>Entrar</Btn> },
+    { id: "spotify", name: "Spotify", text: "Traz a sua biblioteca e as suas playlists, e libera a letra e o Canvas (vídeo da música) do Spotify.",
+      action: accounts.spotify ? <Badge tone="accent"><Check />Conectado</Badge> : <Btn size="sm" variant="primary" onClick={() => openDialog("login", { service: "spotify", from: "welcome" })}>Entrar</Btn> },
+    { id: "discord", name: "Discord", text: "Mostra no seu perfil o que você está ouvindo, com o tempo e a pausa. Não precisa entrar: basta deixar o Discord aberto no computador.",
+      action: discord === "ok" ? <Badge tone="accent"><Check />Conectado</Badge> : <Btn size="sm" onClick={() => { done(); nav("settings/discord"); }}>Ver ajustes</Btn> },
+  ];
+  return (
+    <Modal title="Bem-vindo ao MetroMusic" subtitle="Conecte os serviços que quiser. Tudo é opcional." width={560} onClose={done} footer={<><Btn variant="ghost" onClick={done}>Pular por enquanto</Btn><Btn variant="primary" onClick={done}>Começar a ouvir</Btn></>}>
+      <div className="space-y-2.5">
+        {rows.map((r) => (
+          <div key={r.id} className="flex items-center gap-3.5 p-3.5 rounded-2xl bg-s2">
+            <BrandTile id={r.id} size={44} />
+            <div className="min-w-0 flex-1"><div className="font-semibold">{r.name}</div><div className="text-t3 text-[0.82rem] leading-snug">{r.text}</div></div>
+            <div className="shrink-0">{r.action}</div>
+          </div>
+        ))}
+      </div>
+      <div className="text-t3 text-[0.8rem] mt-4">SoundCloud e Last.fm também estão em Configurações › Integrações. Você pode sair de qualquer serviço quando quiser, e a sessão fica guardada só neste computador.</div>
+    </Modal>
+  );
+}
+
 function Login(p: P) {
   if (p.props.service === "youtube" && isTauri) return <YtLogin {...p} />;
   if (p.props.service === "lastfm" && isTauri) return <LastfmLogin {...p} />;
@@ -455,7 +591,7 @@ function LyricsImage({ props, close }: P) {
 function SongPicker({ label, value, onChange }: { label: string; value: string; onChange: (id: string) => void }) {
   const [q, setQ] = useState(""); const counts = useLib((s) => s.counts);
   const t = getTrack(value);
-  const list = songs.filter((s) => counts[s.id] && norm(`${s.title} ${artistOf(s)}`).includes(norm(q)));
+  const list = Object.keys(counts).map((id) => getTrack(id)).filter((s): s is NonNullable<typeof s> => !!s && norm(`${s.title} ${artistOf(s)}`).includes(norm(q)));
   return (
     <Field label={label}>
       {t ? <div className="flex items-center gap-3 p-2.5 rounded-xl bg-s2"><Cover hue={t.hue} seed={t.seed} src={t.art} className="size-10 rounded-md" /><div className="min-w-0 flex-1"><div className="truncate font-medium">{t.title}</div><div className="text-t3 text-[0.8rem] truncate">{artistOf(t)} · tempo de escuta: {fmtTime((counts[t.id] ?? 0) * t.duration)}</div></div><Btn size="sm" variant="ghost" onClick={() => onChange("")}>Trocar</Btn></div>
@@ -467,32 +603,57 @@ function SongPicker({ label, value, onChange }: { label: string; value: string; 
 function TimeTransfer({ close }: P) {
   const [a, setA] = useState(""); const [b, setB] = useState("");
   return (
-    <Modal title="Transferência de tempo" width={500} onClose={close} footer={<ConfirmFooter onCancel={close} onConfirm={() => { close(); toast("Tempo de escuta transferido"); }} confirm="Converter" disabled={!a || !b || a === b} />}>
-      <div className="p-3.5 rounded-xl bg-warn/12 text-warn text-[0.86rem] mb-5">Esta ação não pode ser desfeita. Faça um backup antes. Só aparecem músicas com pelo menos uma reprodução registrada.</div>
+    <Modal title="Transferência de tempo" width={500} onClose={close} footer={<ConfirmFooter onCancel={close} onConfirm={() => { const n = useLib.getState().transferTime(a, b); close(); toast(n ? `${n} ${n === 1 ? "reprodução transferida" : "reproduções transferidas"}` : "Nada a transferir"); }} confirm="Converter" disabled={!a || !b || a === b} />}>
+      <div className="p-3.5 rounded-xl bg-warn/12 text-warn text-[0.86rem] mb-5">Esta ação não pode ser desfeita. Faça um backup antes. Só aparecem músicas com pelo menos uma reprodução registrada. O histórico da música de origem passa a contar para a de destino.</div>
       <SongPicker label="Música de origem" value={a} onChange={setA} /><SongPicker label="Música de destino" value={b} onChange={setB} />
     </Modal>
   );
 }
 
+/** Aviso de atualização: versão, o que mudou e um botão. Baixa e reinicia sozinho, sem assistente de instalação. */
 function Update({ close }: P) {
-  const [state, setState] = useState<"ask" | "down" | "ready">("ask"); const [pct, setPct] = useState(0);
-  useEffect(() => { if (state !== "down") return; const t = setInterval(() => setPct((p) => { if (p >= 100) { clearInterval(t); setState("ready"); return 100; } return p + 4; }), 120); return () => clearInterval(t); }, [state]);
+  const u = useUpdate();
+  const notes = useMemo(() => parseNotes(u.notes), [u.notes]);
+  const busy = u.status === "downloading" || u.status === "restarting";
+  const pct = Math.round((u.progress ?? 0) * 100);
+  const date = u.date ? new Date(u.date.replace(" +00:00:00", "Z").replace(" ", "T")).toLocaleDateString("pt-BR", { day: "numeric", month: "long", year: "numeric" }) : "";
   return (
-    <Modal title="Atualização disponível" subtitle="MetroMusic 0.2.0 está disponível" width={460} onClose={close} footer={state === "ask" ? <><Btn variant="ghost" onClick={close}>Agora não</Btn><Btn variant="primary" icon={<Download />} onClick={() => setState("down")}>Atualizar</Btn></> : state === "ready" ? <Btn variant="primary" onClick={() => { close(); toast("O app reinicia para concluir a instalação (simulado)"); }}>Instalar e reiniciar</Btn> : undefined}>
-      {state === "ask" ? <ul className="text-t2 space-y-1.5 list-disc pl-5"><li>Mini-player em janela própria</li><li>Crossfade mais suave entre faixas de taxas diferentes</li><li>Correções na sincronia das letras</li></ul>
-        : <><div className="h-2 rounded-full bg-s3 overflow-hidden my-3"><div className="h-full bg-accent transition-[width]" style={{ width: `${pct}%` }} /></div><div className="flex justify-between text-t3 text-[0.82rem] tnum"><span>{(pct * 0.38).toFixed(1).replace(".", ",")} MB de 38,0 MB</span><span>{state === "ready" ? "Pronto para instalar" : "4,2 MB/s"}</span></div></>}
+    <Modal title="Atualização disponível" subtitle={`MetroMusic ${u.version}${u.current ? ` · você está na ${u.current}` : ""}`} width={500} onClose={busy ? () => {} : close}
+      footer={busy ? undefined : <>
+        <Btn variant="ghost" onClick={() => { skipVersion(); close(); }}>Pular esta versão</Btn>
+        <Btn variant="ghost" onClick={close}>Agora não</Btn>
+        <Btn variant="primary" icon={<Download />} onClick={installUpdate}>Atualizar</Btn>
+      </>}>
+      {date && <div className="text-t3 text-[0.8rem] mb-2">Lançada em {date}</div>}
+      <div className="max-h-64 overflow-y-auto rounded-xl bg-s2 p-3.5 text-[0.88rem] text-t2 select-text space-y-1.5">
+        {notes.length ? notes.map((n, i) => n.kind === "h" ? <div key={i} className="font-semibold text-t1 pt-1">{n.text}</div>
+          : n.kind === "li" ? <div key={i} className="flex gap-2"><span className="text-accent">•</span><span>{n.text}</span></div>
+          : <div key={i}>{n.text}</div>) : <div className="text-t3">Sem notas para esta versão.</div>}
+      </div>
+      {busy && (
+        <div className="mt-4">
+          <div className="h-2 rounded-full bg-s3 overflow-hidden"><div className={cx("h-full bg-accent transition-[width] duration-200", u.progress === null && "animate-pulse w-full")} style={u.progress !== null ? { width: `${pct}%` } : undefined} /></div>
+          <div className="flex justify-between text-t3 text-[0.82rem] tnum mt-2">
+            <span>{u.status === "restarting" ? "Reiniciando o MetroMusic…" : "Baixando a atualização…"}</span>
+            <span>{u.total ? `${fmtBytes(u.downloaded)} de ${fmtBytes(u.total)} · ${pct}%` : fmtBytes(u.downloaded)}</span>
+          </div>
+        </div>
+      )}
+      {u.status === "error" && <div className="text-danger text-[0.84rem] mt-3">Não foi possível atualizar: {u.error}. Tente de novo em instantes.</div>}
     </Modal>
   );
 }
 
 const MAP: Record<string, (p: P) => ReactNode> = {
   createPlaylist: CreatePlaylist, editPlaylist: EditPlaylist, editCover: EditCover, duplicates: Duplicates, confirm: Confirm, share: Share, source: Source, editSong: EditSong, editArtist: EditArtist,
-  details: Details, sleep: Sleep, tempo: Tempo, cast: CastDialog, mini: Mini, import: Import, shortcuts: Shortcuts, login: Login, logout: Logout,
+  details: Details, sleep: Sleep, tempo: Tempo, cast: CastDialog, mini: Mini, import: Import, shortcuts: Shortcuts, login: Login, welcome: Welcome, logout: Logout,
   renameRemote: RenameRemote, lyricsSearch: LyricsSearch, lyricsEdit: LyricsEdit, lyricsOffset: LyricsOffset, lyricsImage: LyricsImage, timeTransfer: TimeTransfer, update: Update,
 };
 export function Dialogs() {
   const dialog = useUI((s) => s.dialog), close = useUI((s) => s.closeDialog);
   const C = dialog ? MAP[dialog.type] : null;
-  return <AnimatePresence>{dialog && C && <C key={dialog.type + JSON.stringify(dialog.props?.id ?? "")} props={dialog.props} close={close} />}</AnimatePresence>;
+  // vindo das boas-vindas, fechar o login volta para elas
+  const back = dialog?.props?.from === "welcome" ? () => { close(); openDialog("welcome"); } : close;
+  return <AnimatePresence>{dialog && C && <C key={dialog.type + JSON.stringify(dialog.props?.id ?? "")} props={dialog.props} close={back} />}</AnimatePresence>;
 }
 export { getSetting };

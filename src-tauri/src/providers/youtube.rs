@@ -92,7 +92,7 @@ pub(super) async fn visitor_data() -> Option<String> {
 }
 
 pub(super) fn context(c: &Client, visitor: &Option<String>) -> Value {
-    let mut client = json!({ "clientName": c.name, "clientVersion": c.version, "gl": "US", "hl": "en", "visitorData": visitor });
+    let mut client = json!({ "clientName": c.name, "clientVersion": c.version, "gl": super::prefs::gl(), "hl": super::prefs::hl(), "visitorData": visitor });
     for (k, v) in [("osName", c.os_name), ("osVersion", c.os_version), ("deviceMake", c.make), ("deviceModel", c.model), ("androidSdkVersion", c.sdk)] {
         if let Some(v) = v { client[k] = json!(v); }
     }
@@ -107,7 +107,7 @@ pub(super) async fn post(endpoint: &str, c: &Client, visitor: &Option<String>, b
         .post(format!("{API}/{endpoint}{}prettyPrint=false", if endpoint.contains('?') { "&" } else { "?" }))
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
-        .header("Accept-Language", "en-US,en;q=0.9")
+        .header("Accept-Language", super::prefs::accept_language())
         .header("X-Goog-Api-Format-Version", c.api_format)
         .header("X-YouTube-Client-Name", c.id)
         .header("X-YouTube-Client-Version", c.version)
@@ -166,7 +166,7 @@ pub(super) fn parse_item(r: &Value) -> Option<TrackInfo> {
         if let Some(d) = parse_duration(&text) { duration = Some(d); }
         else if browse.starts_with("UC") { if artist_id.is_none() { artist_id = Some(browse.to_string()); } artists.push(text); }
         else if browse.starts_with("MPRE") { album_id = Some(browse.to_string()); album = Some(text); }
-        else if !matches!(text.as_str(), "Song" | "Video" | "Música" | "Vídeo") { loose.push(text); }
+        else if !super::is_type_label(text.as_str()) { loose.push(text); }
     }
     // Artistas sem link (ex.: "Vários artistas") aparecem como texto solto antes do álbum.
     if artists.is_empty() { if let Some(first) = loose.first() { artists.push(first.clone()); } }
@@ -236,9 +236,25 @@ fn pick_format(player: &Value, expected_ms: Option<u64>) -> Option<Format> {
             approx_duration_ms: approx,
         })
     }).collect();
-    let in_target = list.iter().any(|f| (MIN_KBPS..=MAX_KBPS).contains(&(f.bitrate / 1000)));
-    if in_target { list.retain(|f| (MIN_KBPS..=MAX_KBPS).contains(&(f.bitrate / 1000))); }
-    list.sort_by_key(|f| std::cmp::Reverse(f.bitrate));
+    select_format(list, &super::prefs::quality())
+}
+
+/// Aplica a "Qualidade do áudio". `max` e `auto`: o maior bitrate entre 128 e 256 kbps. `high`: o maior de até 160 kbps
+/// (o AAC padrão do YouTube Music, 128 kbps). `low`: o menor disponível (HE-AAC de ~48 kbps, para economizar dados).
+fn select_format(mut list: Vec<Format>, quality: &str) -> Option<Format> {
+    match quality {
+        "low" => list.sort_by_key(|f| f.bitrate),
+        "high" => {
+            let ok = list.iter().any(|f| f.bitrate / 1000 <= 160 && f.bitrate / 1000 >= MIN_KBPS);
+            if ok { list.retain(|f| f.bitrate / 1000 <= 160); }
+            list.sort_by_key(|f| std::cmp::Reverse(f.bitrate));
+        }
+        _ => {
+            let in_target = list.iter().any(|f| (MIN_KBPS..=MAX_KBPS).contains(&(f.bitrate / 1000)));
+            if in_target { list.retain(|f| (MIN_KBPS..=MAX_KBPS).contains(&(f.bitrate / 1000))); }
+            list.sort_by_key(|f| std::cmp::Reverse(f.bitrate));
+        }
+    }
     list.into_iter().next()
 }
 
@@ -280,24 +296,41 @@ async fn attempt(c: &'static Client, video_id: &str, expected_ms: Option<u64>, v
 
 /// Dispara todos os clientes em paralelo e fica com o primeiro stream utilizável.
 pub async fn resolve(video_id: &str, expected_ms: Option<u64>) -> Res<StreamInfo> {
-    if let Some(s) = STREAMS.lock().get(video_id).filter(|s| s.expires_at_ms > now_ms() + 30_000).cloned() { return Ok(s); }
+    let key = format!("{video_id}|{}", super::prefs::quality());
+    if let Some(s) = STREAMS.lock().get(&key).filter(|s| s.expires_at_ms > now_ms() + 30_000).cloned() { return Ok(s); }
     let visitor = visitor_data().await;
     let mut race: FuturesUnordered<_> = PLAYBACK_CLIENTS.iter().map(|c| attempt(c, video_id, expected_ms, &visitor)).collect();
     let mut failures: Vec<String> = vec![];
     while let Some(r) = race.next().await {
         match r {
-            Ok(info) => { STREAMS.lock().insert(video_id.to_string(), info.clone()); return Ok(info); }
+            Ok(info) => { STREAMS.lock().insert(key.clone(), info.clone()); return Ok(info); }
             Err(e) => failures.push(e),
         }
     }
     Err(format!("YouTube Music: nenhum stream para {video_id} ({})", failures.join("; ")))
 }
 
-pub fn invalidate(video_id: &str) { STREAMS.lock().remove(video_id); }
+pub fn invalidate(video_id: &str) { STREAMS.lock().retain(|k, _| k.split('|').next() != Some(video_id)); }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fmt(kbps: u32) -> Format { Format { url: format!("u{kbps}"), mime: "audio/mp4".into(), codec: "mp4a".into(), bitrate: kbps * 1000, content_length: None, approx_duration_ms: None } }
+
+    #[test]
+    fn qualidade_do_audio_escolhe_o_formato() {
+        let all = || vec![fmt(48), fmt(128), fmt(192), fmt(256)];
+        assert_eq!(select_format(all(), "max").unwrap().url, "u256");
+        assert_eq!(select_format(all(), "auto").unwrap().url, "u256");
+        assert_eq!(select_format(all(), "high").unwrap().url, "u128");
+        assert_eq!(select_format(all(), "low").unwrap().url, "u48");
+        // sem opção barata, "high" cai no melhor que existir; "low" no menor
+        assert_eq!(select_format(vec![fmt(192), fmt(256)], "high").unwrap().url, "u256");
+        assert_eq!(select_format(vec![fmt(192), fmt(256)], "low").unwrap().url, "u192");
+        assert!(select_format(vec![], "max").is_none());
+    }
+
     #[test]
     fn duracao() {
         assert_eq!(parse_duration("3:45"), Some(225_000));

@@ -14,7 +14,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 
-pub const SUPPORTED: [&str; 2] = ["better", "lrclib"];
+pub const SUPPORTED: [&str; 4] = ["better", "lrclib", "kugou", "spotify"];
 const UA: &str = "MetroMusic/0.1 (player de música desktop)";
 
 #[derive(Serialize, Clone, Debug)]
@@ -76,7 +76,7 @@ pub fn parse_lrc(lrc: &str) -> Vec<Line> {
     }).filter(|l| !l.text.is_empty()).collect()
 }
 
-fn plain_lines(text: &str) -> Vec<Line> {
+pub fn plain_lines(text: &str) -> Vec<Line> {
     text.lines().map(str::trim).filter(|l| !l.is_empty()).map(|l| Line { t: 0.0, end: 0.0, text: l.to_string(), words: vec![], bg: false, agent: None }).collect()
 }
 
@@ -150,6 +150,49 @@ async fn lrclib(t: &TrackInfo) -> Option<Lyrics> {
     }
     let lines = plain_lines(best.plain.as_deref()?);
     (!lines.is_empty()).then(|| Lyrics { synced: false, provider: "LrcLib".into(), lines })
+}
+
+// ───────── KuGou (LRC por linha, API pública)
+
+/// Remove as linhas de crédito que o KuGou coloca no começo (título, letrista, compositor).
+fn drop_credits(lines: Vec<Line>) -> Vec<Line> {
+    const MARKS: [&str; 8] = ["作词", "作曲", "编曲", "制作", "Lyrics by", "Composed by", "Written by", "Produced by"];
+    lines.into_iter().enumerate().filter(|(i, l)| !(*i < 8 && l.t < 20.0 && (MARKS.iter().any(|m| l.text.contains(m)) || l.text.contains('：') || (*i == 0 && l.text.contains(" - "))))).map(|(_, l)| l).collect()
+}
+
+fn decode_kugou(content_b64: &str) -> Option<Vec<Line>> {
+    use base64::Engine;
+    let raw = base64::engine::general_purpose::STANDARD.decode(content_b64.trim()).ok()?;
+    let text = String::from_utf8(raw).ok()?;
+    let lines = drop_credits(parse_lrc(text.trim_start_matches('\u{feff}')));
+    (!lines.is_empty()).then_some(lines)
+}
+
+async fn kugou(t: &TrackInfo) -> Option<Lyrics> {
+    let dur = t.duration_ms.unwrap_or(0);
+    let keyword = format!("{} - {}", clean_artist(&t.artist_line()), clean_title(&t.title));
+    let search: Value = CLIENT.get("https://lyrics.kugou.com/search")
+        .query(&[("ver", "1"), ("man", "yes"), ("client", "pc"), ("keyword", keyword.as_str()), ("duration", &dur.to_string())])
+        .header("User-Agent", UA).timeout(Duration::from_secs(10)).send().await.ok()?.json().await.ok()?;
+    let candidates = search.get("candidates")?.as_array()?;
+    // com duração conhecida, aceita até 5 s de diferença
+    let pick = candidates.iter().find(|c| dur == 0 || c.get("duration").and_then(|d| d.as_u64()).map_or(true, |d| d == 0 || d.abs_diff(dur) <= 5000))?;
+    let (id, key) = (pick.get("id")?.as_str()?, pick.get("accesskey")?.as_str()?);
+    let dl: Value = CLIENT.get("https://lyrics.kugou.com/download")
+        .query(&[("ver", "1"), ("client", "pc"), ("id", id), ("accesskey", key), ("fmt", "lrc"), ("charset", "utf8")])
+        .header("User-Agent", UA).timeout(Duration::from_secs(10)).send().await.ok()?.json().await.ok()?;
+    let lines = decode_kugou(dl.get("content")?.as_str()?)?;
+    Some(Lyrics { synced: true, provider: "KuGou".into(), lines })
+}
+
+// ───────── Spotify (letra do player web; precisa da conta conectada)
+
+async fn spotify(t: &TrackInfo) -> Option<Lyrics> {
+    if !crate::settings::current().values.get("spotifyLyrics").and_then(|v| v.as_bool()).unwrap_or(true) { return None; }
+    let id = crate::providers::spotify::resolve_id(t).await.ok()??;
+    let (synced, text) = crate::providers::spotify::color_lyrics(&id).await.ok()??;
+    let lines = if synced { parse_lrc(&text) } else { plain_lines(&text) };
+    (!lines.is_empty()).then(|| Lyrics { synced, provider: "Spotify".into(), lines })
 }
 
 // ───────── BetterLyrics (TTML)
@@ -264,8 +307,11 @@ pub async fn get(track: &TrackInfo, order: &[String]) -> Res<Option<Lyrics>> {
     let key = format!("{}|{}", track.key(), order.join(","));
     if let Some(hit) = CACHE.lock().get(&key) { return Ok(hit.clone()); }
     let mut found = None;
+    let embedded_on = crate::settings::current().values.get("readEmbeddedLyrics").and_then(|v| v.as_bool()).unwrap_or(true);
+    if track.provider == "local" && embedded_on { found = crate::local::lyrics(std::path::Path::new(&track.id)); }
     for p in order {
-        let r = match p.as_str() { "better" => better(track).await, "lrclib" => lrclib(track).await, _ => None };
+        if found.is_some() { break; }
+        let r = match p.as_str() { "better" => better(track).await, "lrclib" => lrclib(track).await, "kugou" => kugou(track).await, "spotify" => spotify(track).await, _ => None };
         if r.is_some() { found = r; break; }
     }
     CACHE.lock().insert(key, found.clone());
@@ -303,6 +349,16 @@ mod tests {
         assert_eq!(l[2].t, 15.0);
         assert_eq!(l[0].agent.as_deref(), Some("v1"));
     }
+    #[test]
+    fn kugou_decodifica_e_tira_creditos() {
+        use base64::Engine;
+        let lrc = "[ti:X]\r\n[00:00.00]Blinding Lights - The Weeknd\r\n[00:01.75]Lyrics by：A\r\n[00:10.00]Yeah\r\n[00:14.50]I\'ve been tryna call\r\n";
+        let b64 = base64::engine::general_purpose::STANDARD.encode(lrc.as_bytes());
+        let lines = super::decode_kugou(&b64).unwrap();
+        assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), vec!["Yeah", "I've been tryna call"]);
+        assert!(super::decode_kugou("não é base64!!").is_none());
+    }
+
     #[test]
     fn limpa_titulo_e_artista() {
         assert_eq!(clean_title("Song (Official Video) [HD]"), "Song");

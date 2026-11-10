@@ -1,3 +1,4 @@
+import { useDiscord } from "../lib/discord";
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { ChevronLeft, ChevronRight, CircleUser, Clock, History as HistoryIcon, ListPlus, LogIn, LogOut, Pause, Play, Search, Trash2, TrendingUp, X, Check, Settings } from "lucide-react";
@@ -240,7 +241,7 @@ function WrappedStory({ recap, onBack }: { recap?: Recap; onBack?: () => void })
   const p = pages[Math.min(i, last)];
   return (
     <div className="h-[calc(100vh-9.2rem)] p-5 flex justify-center">
-      <div className="relative h-full aspect-[9/14] max-w-full rounded-3xl overflow-hidden text-white shadow-2xl" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setI((v) => (e.clientX - r.left < r.width * 0.3 ? Math.max(0, v - 1) : Math.min(last, v + 1))); }}>
+      <div className="relative h-full aspect-[9/14] max-w-full rounded-3xl overflow-hidden text-white shadow-2xl cursor-pointer" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setI((v) => (e.clientX - r.left < r.width * 0.3 ? Math.max(0, v - 1) : Math.min(last, v + 1))); }}>
         <AnimatePresence initial={false}>
           <motion.div key={i} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.6 }} className="absolute inset-0" style={{ background: `linear-gradient(160deg, oklch(0.55 0.2 ${p.hue}), oklch(0.32 0.15 ${(p.hue + 50) % 360}) 60%, oklch(0.2 0.08 ${(p.hue + 90) % 360}))` }}>
             <div className="absolute -top-24 -left-24 size-96 rounded-full blur-3xl opacity-50 drift" style={{ background: `oklch(0.75 0.18 ${(p.hue + 60) % 360})` }} />
@@ -259,7 +260,9 @@ function WrappedStory({ recap, onBack }: { recap?: Recap; onBack?: () => void })
 // ───────── Conta
 const SERVICE_LIST: [string, string, number, string][] = [["youtube", "YouTube Music", 25, "Início, biblioteca e sincronização"], ["deezer", "Deezer", 300, "Reprodução em FLAC e letras"], ["tidal", "TIDAL", 220, "Hi-Res e capas animadas"], ["spotify", "Spotify", 150, "Canvas, início e histórico"], ["soundcloud", "SoundCloud", 50, "Início personalizado"], ["lastfm", "Last.fm", 10, "Scrobbling"], ["discord", "Discord", 265, "Rich Presence"]];
 export function AccountPage() {
-  const accounts = useLib((s) => s.accounts), saved = useLib((s) => s.savedPlaylists), savedAlbums = useLib((s) => s.savedAlbums), followed = useLib((s) => s.followed), subs = useLib((s) => s.subscribedPodcasts);
+  const libAccounts = useLib((s) => s.accounts), discordState = useDiscord((s) => s.state);
+  const accounts: Record<string, string | undefined> = { ...libAccounts, discord: discordState === "ok" ? "Conectado" : undefined };
+  const saved = useLib((s) => s.savedPlaylists), savedAlbums = useLib((s) => s.savedAlbums), followed = useLib((s) => s.followed), subs = useLib((s) => s.subscribedPodcasts);
   const [tab, setTab] = useState(isTauri ? "songs" : "playlists");
   const yt = accounts.youtube; const sc = accounts.soundcloud; const info = useYt((s) => s.info); const real = isTauri;
   const [scTab, setScTab] = useState<"songs" | "playlists" | "history">("songs");
@@ -278,8 +281,8 @@ export function AccountPage() {
         {SERVICE_LIST.map(([id, name, hue, desc]) => (
           <button key={id} onClick={() => nav(`settings/${id === "youtube" ? "privacy" : id}`)} className="flex items-center gap-3.5 p-4 rounded-2xl bg-s1 hover:bg-s2 text-left transition-colors">
             <BrandTile id={id as BrandId} size={44} />
-            <div className="min-w-0 flex-1"><div className="font-semibold">{name}</div><div className="text-t3 text-[0.82rem] truncate">{accounts[id] ? `Conectado como ${accounts[id]}` : desc}</div></div>
-            {accounts[id] ? <Check className="size-5 text-ok" /> : <span className="text-accent text-[0.84rem] font-semibold">Conectar</span>}
+            <div className="min-w-0 flex-1"><div className="font-semibold">{name}</div><div className="text-t3 text-[0.82rem] truncate">{accounts[id] ? (id === "discord" ? "Conectado ao Discord" : `Conectado como ${accounts[id]}`) : desc}</div></div>
+            {accounts[id] ? <Check className="size-5 text-ok" /> : id === "discord" ? <span className="text-t3 text-[0.84rem]">Aguardando</span> : <span className="text-accent text-[0.84rem] font-semibold">Conectar</span>}
           </button>
         ))}
       </div>

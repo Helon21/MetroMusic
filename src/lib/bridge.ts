@@ -4,8 +4,10 @@
 import { DEFAULTS } from "./settingsSchema";
 import { albumOf, artistOf, getTrack } from "./catalog";
 import { currentWindow, emitEvent, invoke, isTauri, onEvent } from "./native";
+import { engine } from "./engine";
 import { useLib } from "../store/library";
 import { usePlayer } from "../store/player";
+import { useUI } from "../store/ui";
 import { getSetting, useSettings } from "../store/settings";
 
 /** Resumo do que o mini-player precisa para se desenhar. */
@@ -80,6 +82,25 @@ async function syncAutostart() {
   } catch (e) { console.warn("iniciar com o sistema indisponível:", e); }
 }
 
+/** Idioma e país do conteúdo ("Padrão do sistema" usa o do navegador/sistema) e uso do login ao navegar. */
+export function contentPrefs() {
+  const sys = (typeof navigator !== "undefined" && navigator.language) || "en-US";
+  const lang = String(getSetting("contentLanguage")), country = String(getSetting("contentCountry"));
+  return {
+    language: lang === "system" ? sys : lang,
+    country: country === "system" ? (sys.split("-")[1] ?? "US") : country,
+    loginForBrowse: getSetting("useLoginForBrowse") !== false,
+  };
+}
+function syncContentPrefs() {
+  const c = contentPrefs();
+  invoke("content_prefs_set", { language: c.language, country: c.country, loginForBrowse: c.loginForBrowse });
+  invoke("audio_quality_set", { quality: String(getSetting("audioQuality")), soundcloud: String(getSetting("soundcloudQuality")) });
+}
+
+/** Mantém a tela ligada enquanto o Tocando agora está aberto e a música toca (opção "Manter a tela ligada"). */
+export function wantAwake(keepAwake: boolean, nowPlaying: boolean, playing: boolean) { return keepAwake && nowPlaying && playing; }
+
 let started = false;
 /** Liga tudo. Chamado uma vez, só na janela principal. */
 export function startBridge() {
@@ -138,4 +159,25 @@ export function startBridge() {
   if (getSetting("launchAtLogin")) syncAutostart();
   nativeUpdate();
   if (isTauri && getSetting("startMinimized")) currentWindow().then((w) => w.minimize());
+
+  // Tela ligada
+  let awake = false;
+  const syncAwake = () => {
+    const want = wantAwake(!!getSetting("keepAwake"), useUI.getState().nowPlaying, usePlayer.getState().playing);
+    if (want === awake) return;
+    awake = want;
+    invoke("keep_awake_set", { on: want })?.catch?.((e: unknown) => { awake = false; console.warn("manter a tela ligada:", e); });
+  };
+  useUI.subscribe(syncAwake); usePlayer.subscribe(syncAwake); useSettings.subscribe(syncAwake);
+
+  // Conteúdo: idioma, país e login ao navegar. Ao mudar, a próxima abertura da Início/Explorar já usa os novos valores.
+  syncContentPrefs();
+  const prefsKey = () => JSON.stringify([contentPrefs(), getSetting("audioQuality"), getSetting("soundcloudQuality")]);
+  let lastPrefs = prefsKey(), lastQuality = getSetting("audioQuality");
+  useSettings.subscribe(() => {
+    const now = prefsKey(); if (now === lastPrefs) return; lastPrefs = now; syncContentPrefs();
+    const q = getSetting("audioQuality");
+    // "Preferir cache após trocar a qualidade" desligado: o que já foi baixado na qualidade antiga é descartado
+    if (q !== lastQuality) { lastQuality = q; if (!getSetting("expKeepCacheOnQuality")) engine.cacheClear(); }
+  });
 }

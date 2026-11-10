@@ -7,7 +7,7 @@ import { TrackList, Grid } from "../components/media";
 import { Btn, Cover, Empty, IconBtn, Spinner } from "../components/ui";
 import { usePlayer } from "../store/player";
 import { nav, openDialog, toast, useUI } from "../store/ui";
-import { loggedIn, notifyRemoteChanged, saveToLibrary, type AccountProvider } from "../lib/accountPlaylists";
+import { inLibrary, loggedIn, notifyRemoteChanged, saveToLibrary, type AccountProvider } from "../lib/accountPlaylists";
 import { Hero, PlayActions } from "./Collection";
 
 interface Data { title: string; subtitle: string; description?: string | null; artwork?: string | null; ids: string[]; sections: RSection[]; items: RItem[]; editable?: boolean }
@@ -28,10 +28,21 @@ export default function RemoteCollection({ kind, id }: { kind: string; id: strin
           const list = (await engine.ytRadio(null, id)) ?? [];
           if (!dead) setData({ title: "Mix", subtitle: `${list.length} músicas`, ids: list.map((t) => registerTrack(t).id), sections: [], items: [] });
         } else {
-          const p = await engine.page(id);
+          // playlists longas do YouTube Music: mostra a primeira parte já e completa o resto em segundo plano
+          const partial = !id.startsWith("sp:") && !id.startsWith("sc:");
+          const p = await (partial ? engine.ytPagePartial(id) : engine.page(id));
           if (!p || dead) return;
           registerPage(p);
-          setData({ title: p.title, subtitle: p.subtitle, description: p.description, artwork: p.artwork, ids: p.tracks.map((t) => `${t.provider}:${t.id}`), sections: p.sections, items: p.items, editable: p.editable });
+          const ids = p.tracks.map((t) => `${t.provider}:${t.id}`);
+          setData({ title: p.title, subtitle: p.subtitle, description: p.description, artwork: p.artwork, ids, sections: p.sections, items: p.items, editable: p.editable });
+          let token = p.continuation ?? null;
+          while (token && !dead) {
+            const [more, next] = (await engine.ytPageMore(token, p.artwork)) ?? [[], null];
+            if (dead) return;
+            more.forEach((t) => { registerTrack(t); ids.push(`${t.provider}:${t.id}`); });
+            token = next;
+            setData((d) => (d ? { ...d, ids: [...ids] } : d));
+          }
         }
       } catch (e) { if (!dead) setError(String(e)); }
     })();
@@ -40,21 +51,34 @@ export default function RemoteCollection({ kind, id }: { kind: string; id: strin
   // algo mudou na conta (adicionou/removeu faixa, salvou, renomeou): recarrega a página aberta
   useEffect(() => { const h = () => setNonce((n) => n + 1); window.addEventListener("mm:remote-changed", h); return () => window.removeEventListener("mm:remote-changed", h); }, []);
 
+  // a playlist/álbum/artista já está na biblioteca da conta? (decide entre "Salvar" e "Remover")
+  const [saved, setSaved] = useState<boolean | null>(null);
+  const [savedTick, setSavedTick] = useState(0);
+  useEffect(() => { const h = () => setSavedTick((n) => n + 1); window.addEventListener("mm:remote-changed", h); return () => window.removeEventListener("mm:remote-changed", h); }, []);
+  const provider: AccountProvider = id.startsWith("sp:") ? "spotify" : "youtube";
+  useEffect(() => {
+    let dead = false;
+    setSaved(null);
+    if (!loggedIn(provider) || !["album", "playlist", "artist"].includes(kind)) return;
+    inLibrary(provider, kind as "album" | "playlist" | "artist", id).then((v) => { if (!dead) setSaved(v); }).catch(() => {});
+    return () => { dead = true; };
+  }, [kind, id, provider, savedTick]);
+
   const gridItems = useMemo(() => (data?.items ?? []).filter((i) => i.collection), [data]);
   if (error) return <Empty icon={<WifiOff />} title="Não foi possível abrir" text={error}><Btn variant="primary" onClick={() => setNonce((n) => n + 1)}>Tentar de novo</Btn></Empty>;
   if (!data) return <div className="grid place-items-center h-80 text-t3"><Spinner className="size-7" /></div>;
 
   const artist = kind === "artist";
   const first = data.ids[0];
-  const provider: AccountProvider = id.startsWith("sp:") ? "spotify" : "youtube";
   // no Spotify só dá para salvar álbum e seguir artista (playlist de outra pessoa não é possível por aqui)
   const canManage = loggedIn(provider) && (kind === "album" || kind === "artist" || (kind === "playlist" && provider === "youtube"));
   const libraryMenu = (e: React.MouseEvent<HTMLElement>) => {
     const k = kind as "album" | "playlist" | "artist";
     const own = !!data.editable;
     useUI.getState().openMenuAt(e.currentTarget, [
-      { label: k === "artist" ? "Seguir" : "Salvar na biblioteca", icon: <LibraryIcon />, onClick: () => saveToLibrary(provider, k, id, true) },
-      { label: k === "artist" ? "Deixar de seguir" : "Remover da biblioteca", icon: <Trash2 />, onClick: () => saveToLibrary(provider, k, id, false) },
+      saved
+        ? { label: k === "artist" ? "Deixar de seguir" : "Remover da biblioteca", icon: <Trash2 />, onClick: () => saveToLibrary(provider, k, id, false) }
+        : { label: k === "artist" ? "Seguir" : "Salvar na biblioteca", icon: <LibraryIcon />, onClick: () => saveToLibrary(provider, k, id, true) },
       ...(own && provider === "youtube" ? [
         { divider: true },
         { label: "Renomear playlist…", icon: <Pencil />, onClick: () => openDialog("renameRemote", { provider, id, name: data.title }) },
@@ -71,7 +95,7 @@ export default function RemoteCollection({ kind, id }: { kind: string; id: strin
         meta={<span>{data.subtitle}{data.ids.length > 0 && !data.subtitle.includes("músicas") ? ` · ${data.ids.length} músicas` : ""}</span>}>
         <PlayActions ids={data.ids} title={data.title} disabled={!data.ids.length} />
         {first && <IconBtn label="Iniciar rádio" size={44} onClick={() => usePlayer.getState().startRadio(first)}><Radio /></IconBtn>}
-        {canManage && <Btn variant="soft" icon={<LibraryIcon />} onClick={libraryMenu}>{artist ? "Seguir" : "Biblioteca"}</Btn>}
+        {canManage && <Btn variant="soft" icon={<LibraryIcon />} onClick={libraryMenu}>{artist ? (saved ? "Seguindo" : "Seguir") : saved ? "Na biblioteca" : "Biblioteca"}</Btn>}
       </Hero>
       {data.ids.length > 0 && <div className="px-5"><TrackList ids={data.ids} title={data.title} showAlbum={kind !== "album"} ctxOf={() => (data.editable && kind === "playlist" && loggedIn(provider) ? { remote: { provider, playlistId: id } } : {})} /></div>}
       <div className="px-8 mt-8">

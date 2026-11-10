@@ -173,7 +173,7 @@ async fn net_ytmusic_inicio_e_paginas() {
 #[ignore]
 async fn net_letras() {
     let t = TrackInfo { provider: "youtube".into(), id: "J7p4bzqLvCw".into(), title: "Blinding Lights".into(), artists: vec!["The Weeknd".into()], album: Some("After Hours".into()), duration_ms: Some(202_000), ..Default::default() };
-    for p in ["better", "lrclib"] {
+    for p in ["better", "lrclib", "kugou"] {
         let l = crate::lyrics::get(&t, &[p.to_string()]).await.unwrap();
         match l {
             Some(l) => println!("LETRA {p}: {} | sincronizada={} | {} linhas | 1ª: {:?} | palavras da 1ª: {} | bg={}", l.provider, l.synced, l.lines.len(), l.lines[0].text, l.lines[0].words.len(), l.lines.iter().filter(|x| x.bg).count()),
@@ -668,4 +668,152 @@ async fn net_yt_restaurar_recap() {
         println!("YTR após {}s: March-May Recap na biblioteca = {tem} (total {})", (s + 1) * 3, lib.items.len());
         if tem { break; }
     }
+}
+
+/// O idioma e o país do conteúdo mudam o que o YouTube Music devolve; o parser precisa continuar achando
+/// título e artista (e não confundir o rótulo "Música"/"Song" com o artista).
+#[tokio::test]
+#[ignore]
+async fn net_conteudo_idioma_e_pais() {
+    for (hl, gl) in [("pt-BR", "BR"), ("en", "US"), ("es", "ES")] {
+        crate::providers::prefs::set(hl, gl, true);
+        let home = ytmusic::home(None, None).await.expect("início");
+        let tracks: Vec<_> = home.sections.iter().flat_map(|s| s.items.iter()).filter_map(|i| i.track.as_ref()).collect();
+        println!("{hl}/{gl}: {} seções, {} faixas; 1ª seção: {:?}", home.sections.len(), tracks.len(), home.sections.first().map(|s| s.title.as_str()));
+        assert!(!home.sections.is_empty(), "{hl}: Início vazia");
+        assert!(!tracks.is_empty(), "{hl}: nenhuma faixa na Início");
+        for t in tracks.iter().take(40) {
+            assert!(!t.title.is_empty(), "{hl}: faixa sem título");
+            assert!(!crate::providers::is_type_label(&t.title), "{hl}: o tipo virou título: {}", t.title);
+            assert!(t.artists.iter().all(|a| !crate::providers::is_type_label(a)), "{hl}: o tipo virou artista: {:?}", t.artists);
+        }
+    }
+    crate::providers::prefs::set("en", "US", true);
+}
+
+/// A verificação de saúde fala com os serviços de verdade e devolve um estado para cada provedor.
+#[tokio::test]
+#[ignore]
+async fn net_saude_dos_provedores() {
+    let all = crate::providers::health::check_all().await;
+    for h in &all { println!("SAUDE {:<11} {:<11} {:>5} ms  {}", h.id, h.status, h.ms, h.detail); }
+    assert_eq!(all.len(), 6);
+    let by = |id: &str| all.iter().find(|h| h.id == id).unwrap();
+    assert_ne!(by("youtube").status, "offline", "YouTube Music deveria responder");
+    assert_eq!(by("tidal").status, "unavailable");
+    assert_eq!(by("qobuz").status, "unavailable");
+}
+
+/// A qualidade escolhida muda o stream que o YouTube Music entrega (bitrates diferentes).
+#[tokio::test]
+#[ignore]
+async fn net_qualidade_do_audio() {
+    let mut got = vec![];
+    for q in ["low", "high", "max"] {
+        crate::providers::prefs::set_quality(q);
+        let s = crate::providers::youtube::resolve("dQw4w9WgXcQ", None).await.expect("stream");
+        println!("QUALIDADE {q}: {} kbps ({})", s.bitrate / 1000, s.codec);
+        got.push(s.bitrate);
+    }
+    crate::providers::prefs::set_quality("max");
+    assert!(got[0] <= got[1] && got[1] <= got[2], "low ≤ high ≤ max: {got:?}");
+}
+
+/// JioSaavn de verdade: busca, URL assinada na qualidade pedida (a taxa vem da URL) e início por idioma. Não baixa o áudio (CDN dá 403).
+#[tokio::test]
+#[ignore]
+async fn net_jiosaavn() {
+    use crate::providers::{jiosaavn, prefs};
+    let found = jiosaavn::search("arijit singh tum hi ho", 5).await.expect("busca");
+    assert!(!found.is_empty(), "a busca deveria achar faixas");
+    let t = &found[0];
+    println!("JIO achou: {} — {} ({:?} ms)", t.title, t.artist_line(), t.duration_ms);
+    let mut rates = vec![];
+    for q in ["320", "96"] {
+        prefs::set_jio(q, "english");
+        jiosaavn::clear_streams();
+        let s = jiosaavn::resolve(t).await.expect("stream");
+        println!("JIO qualidade {q}: {} kbps {}", s.bitrate / 1000, &s.url[..60.min(s.url.len())]);
+        // A CDN (web.saavncdn.com) responde 403 a clientes que não são o site; por isso o áudio NÃO é baixado aqui
+        // e o JioSaavn não está ligado à reprodução na interface.
+        rates.push(s.bitrate);
+    }
+    assert!(rates[0] > rates[1], "320 deveria ser maior que 96: {rates:?}");
+    for lang in ["hindi", "english"] {
+        prefs::set_jio("320", lang);
+        let home = jiosaavn::home().await.expect("início");
+        println!("JIO início {lang}: {} seções, {} faixas na primeira", home.len(), home[0].items.len());
+        assert!(!home[0].items.is_empty());
+    }
+}
+
+/// Link de faixa: o rádio da faixa começa por ela mesma (é o que `openLinks` toca).
+#[tokio::test]
+#[ignore]
+async fn net_radio_comeca_pela_faixa_do_link() {
+    let list = crate::providers::ytmusic::radio(Some("dQw4w9WgXcQ"), None).await.expect("rádio");
+    println!("RADIO {} faixas; 1ª: {} ({})", list.len(), list[0].title, list[0].id);
+    assert_eq!(list[0].id, "dQw4w9WgXcQ");
+}
+
+/// As fontes de áudio para a mesma música: só resultados válidos, com título e artista reais.
+#[tokio::test]
+#[ignore]
+async fn net_fontes_de_audio_da_mesma_musica() {
+    let wanted = TrackInfo { provider: "deezer".into(), id: "1".into(), title: "Blinding Lights".into(), artists: vec!["The Weeknd".into()], duration_ms: Some(200_000), ..Default::default() };
+    let order = vec!["youtube".to_string(), "soundcloud".to_string()];
+    let list = crate::providers::candidates(&wanted, &order).await;
+    for c in &list { println!("FONTE {:<10} {:>3} {:>5} ms  {} — {} ({:?} ms)", c.track.provider, c.score, c.ms, c.track.title, c.track.artist_line(), c.track.duration_ms); }
+    assert!(!list.is_empty(), "deveria achar a música em algum provedor");
+    for c in &list { assert!(crate::providers::matcher::confidence(&wanted, &c.track).is_some(), "só resultados válidos: {}", c.track.title); }
+    assert!(list.iter().any(|c| c.track.provider == "youtube"));
+}
+
+/// Importação de verdade: títulos e artistas viram faixas tocáveis; o que não existe fica de fora.
+#[tokio::test]
+#[ignore]
+async fn net_importacao_acha_as_musicas() {
+    use crate::importer::{match_all, Wanted};
+    let w = |t: &str, a: &str, d| Wanted { title: t.into(), artist: a.into(), duration_sec: d };
+    let items = vec![w("Blinding Lights", "The Weeknd", Some(200)), w("Bohemian Rhapsody", "Queen", Some(355)), w("zzzxqj faixa inexistente 91827", "ninguem", None)];
+    let r = match_all(items, vec!["youtube".into(), "soundcloud".into()], |d, t| println!("IMPORT {d}/{t}")).await;
+    for x in &r { println!("IMPORT -> {:?}", x.as_ref().map(|t| format!("{} — {} [{}]", t.title, t.artist_line(), t.provider))); }
+    assert!(r[0].is_some() && r[1].is_some(), "as duas músicas conhecidas deveriam ser achadas");
+    assert!(r[2].is_none(), "a música inexistente não pode virar um palpite");
+}
+
+/// Download de verdade: faixa do YouTube Music → arquivo na pasta, com título, artista, capa e letra gravados,
+/// e depois lido de volta como faixa local.
+#[tokio::test]
+#[ignore]
+async fn net_download_real_com_tags_e_letra() {
+    use crate::downloads::{download_stream, Options};
+    let order = vec!["youtube".to_string()];
+    let found = crate::providers::search("youtube", "Blinding Lights The Weeknd", 5).await.expect("busca");
+    let track = found.into_iter().find(|t| t.title.to_lowercase().contains("blinding lights") && t.duration_ms.map_or(false, |d| d > 150_000 && d < 260_000)).expect("faixa do YouTube Music");
+    println!("DOWNLOAD faixa: {} — {} ({:?} ms) capa={:?}", track.title, track.artist_line(), track.duration_ms, track.artwork_url.is_some());
+    let stream = crate::providers::resolve(&track, &order).await.expect("stream");
+    let dir = std::env::temp_dir().join(format!("mm-net-dl-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let cache = crate::cache::Cache::open(dir.join("cache"), 200);
+    let last = std::sync::Mutex::new(0.0f64);
+    let done = download_stream(&cache, &track, stream, None, &dir.join("Musica"), &Options { write_tags: true, embed_lyrics: true }, |p| { *last.lock().unwrap() = p; }).await.expect("download");
+    println!("DOWNLOAD arquivo: {} ({:.2} MB) aviso={:?}", done.path, done.bytes as f64 / 1048576.0, done.tag_warning);
+    assert!(done.bytes > 1_000_000, "arquivo pequeno demais");
+    assert!(done.tag_warning.is_none(), "tags: {:?}", done.tag_warning);
+    assert_eq!(*last.lock().unwrap(), 1.0);
+    let t = crate::local::read_track(std::path::Path::new(&done.path), &dir.join("covers"), true).expect("ler de volta");
+    println!("DOWNLOAD lido: {} — {:?} | álbum {:?} | {:?} ms | capa={}", t.title, t.artists, t.album, t.duration_ms, t.cover.is_some());
+    assert_eq!(t.title, track.title);
+    assert!(!t.artists.is_empty());
+    assert!(t.cover.is_some(), "a capa deveria estar no arquivo");
+    let d = t.duration_ms.unwrap_or(0);
+    assert!(d > 150_000 && d < 260_000, "duração fora do esperado: {d}");
+    let lyr = crate::local::lyrics(std::path::Path::new(&done.path));
+    println!("DOWNLOAD letra no arquivo: {:?}", lyr.as_ref().map(|l| (l.synced, l.lines.len())));
+    assert!(lyr.is_some(), "a letra deveria estar gravada no arquivo");
+    // e o motor consegue abri-lo como fonte local
+    let s = crate::local::resolve(&TrackInfo { provider: "local".into(), id: done.path.clone(), ..Default::default() }).expect("fonte local");
+    assert_eq!(s.source, "local");
+    let _ = std::fs::remove_dir_all(&dir);
 }

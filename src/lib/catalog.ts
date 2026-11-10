@@ -5,7 +5,7 @@ export type SourceId = "youtube" | "tidal" | "spotify" | "soundcloud" | "deezer"
 
 /** Faixa como o backend a descreve (espelha `TrackInfo` em src-tauri/src/model.rs). */
 export interface ExtInfo {
-  provider: "youtube" | "soundcloud" | "deezer" | "spotify"; id: string; title: string; artists: string[];
+  provider: "youtube" | "soundcloud" | "deezer" | "spotify" | "jiosaavn" | "local"; id: string; title: string; artists: string[];
   album?: string | null; durationMs?: number | null; isrc?: string | null; artworkUrl?: string | null;
   explicit?: boolean; url?: string | null; previewUrl?: string | null;
   /** ids de navegação do YouTube Music (álbum MPRE…, canal UC…) */
@@ -300,7 +300,7 @@ export function registerTrack(info: ExtInfo, persist = true): Track {
   const prev = T.get(id);
   const t: Track = {
     id, title: info.title, artistId, albumId, duration: Math.round((info.durationMs ?? 0) / 1000), explicit: !!info.explicit, plays: 0,
-    hue: h % 360, seed: h % 1e6, provider: info.provider, format: "—", bitrate: "—", sampleRate: "—", ext: info, art: info.artworkUrl ?? undefined,
+    hue: h % 360, seed: h % 1e6, provider: info.provider === "local" ? "offline" : info.provider, format: "—", bitrate: "—", sampleRate: "—", ext: info, art: info.artworkUrl ?? undefined,
   };
   if (prev) Object.assign(prev, t); else T.set(id, t);
   const track = T.get(id)!;

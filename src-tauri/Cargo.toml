@@ -12,7 +12,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "protocol-asset"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
@@ -22,7 +22,8 @@ serde_json = "1"
 
 # Backend de áudio e provedores
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["socks", "rustls-tls", "json", "gzip"] }
 futures-util = "0.3"
 symphonia = { version = "0.5", default-features = false, features = ["aac", "mp3", "isomp4", "flac", "vorbis", "ogg", "wav", "pcm", "alac"] }
 cpal = "0.15"
@@ -36,3 +37,11 @@ md-5 = "0.10"
 unicode-normalization = "0.1"
 urlencoding = "2"
 roxmltree = "0.20"
+tauri-plugin-dialog = "2"
+keepawake = "0.6.1"
+open = "5.4.5"
+lofty = "0.25.5"
+walkdir = "2.5.0"
+notify = "8.2.2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"

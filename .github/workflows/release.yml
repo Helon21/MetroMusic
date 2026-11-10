@@ -1,0 +1,72 @@
+# Publica uma versão: ao criar uma tag `v*` (ex.: v0.1.0) compila para Linux e Windows, assina os pacotes e anexa
+# tudo à Release do GitHub, junto com o `latest.json` que o app usa para se atualizar sozinho.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  notes:
+    runs-on: ubuntu-22.04
+    outputs:
+      body: ${{ steps.n.outputs.body }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: n
+        name: Notas da versão (seção do CHANGELOG.md)
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          body="$(awk -v v="$v" '$0 ~ "^## \\[?"v"\\]?( |$)" {f=1; next} /^## / && f {exit} f' CHANGELOG.md)"
+          if [ -z "$body" ]; then body="Versão $v."; fi
+          { echo "body<<EOF_NOTES"; echo "$body"; echo "EOF_NOTES"; } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: notes
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+          - os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Dependências do Linux
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf libasound2-dev libssl-dev libxdo-dev
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: MetroMusic ${{ github.ref_name }}
+          releaseBody: ${{ needs.notes.outputs.body }}
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true

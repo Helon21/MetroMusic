@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { create } from "zustand";
 import { Ban, Check, Copy, Crown, DoorOpen, Download, Ellipsis, FileUp, History as HistoryIcon, ListPlus, LogIn, Mic, Play, Plus, RefreshCw, RotateCcw, ScrollText, Search, Settings, Share2, Trash2, UserMinus, Users, Volume2, VolumeX, Wand2, Wifi, WifiOff, X, Headphones, SlidersHorizontal } from "lucide-react";
 import { artistOf, getTrack, sample, songs } from "../lib/catalog";
+import { useLT } from "../lib/lt/session";
 import { trackMenu } from "../lib/menus";
 import { copyText, cx, dayLabel, norm } from "../lib/util";
 import { useLib } from "../store/library";
@@ -11,38 +12,8 @@ import { setSetting, useSetting } from "../store/settings";
 import { nav, openDialog, toast, useUI } from "../store/ui";
 import { Badge, Btn, Checkbox, Cover, coverBg, Empty, Eq, IconBtn, Modal, Range, SectionTitle, Segmented, Spinner, Switch, TextField } from "../components/ui";
 
-// ───────── Ouvir junto (sessão simulada)
-interface Member { id: string; name: string; host?: boolean; you?: boolean; hue: number; muted?: boolean }
-interface LT {
-  conn: "off" | "connecting" | "on" | "error"; room: string | null; role: "host" | "guest" | null; waiting: boolean;
-  members: Member[]; requests: Member[]; suggestions: { id: number; by: string; trackId: string }[]; blocked: string[]; logs: string[];
-  log: (m: string) => void; connect: () => void; disconnect: () => void; create: (name: string) => void; join: (name: string, code: string) => void; leave: () => void;
-}
-const ts = () => new Date().toLocaleTimeString("pt-BR");
-let timers: ReturnType<typeof setTimeout>[] = [];
-const later = (ms: number, fn: () => void) => timers.push(setTimeout(fn, ms));
-export const useLT = create<LT>((set, get) => ({
-  conn: "off", room: null, role: null, waiting: false, members: [], requests: [], suggestions: [], blocked: [], logs: [],
-  log: (m) => set((s) => ({ logs: [`[${ts()}] ${m}`, ...s.logs].slice(0, 80) })),
-  connect: () => { set({ conn: "connecting" }); get().log("Conectando a wss://together.metromusic.app…"); later(900, () => { set({ conn: "on" }); get().log("Conectado. Latência: 38 ms"); }); },
-  disconnect: () => { timers.forEach(clearTimeout); timers = []; set({ conn: "off", room: null, role: null, members: [], requests: [], suggestions: [], waiting: false }); get().log("Desconectado"); },
-  create: (name) => {
-    const room = Math.random().toString(36).slice(2, 8).toUpperCase();
-    set({ room, role: "host", members: [{ id: "me", name, host: true, you: true, hue: 295 }] }); get().log(`Sala criada: ${room}`); toast(`Sala criada: ${room}`);
-    later(3500, () => { if (get().room !== room) return; set((s) => ({ requests: [...s.requests, { id: "luiza", name: "luiza_m", hue: 20 }] })); get().log("luiza_m pediu para entrar"); toast("luiza_m quer entrar na sala", { label: "Aprovar", fn: () => approve("luiza") }); });
-    later(9000, () => { if (get().room !== room) return; set((s) => ({ requests: [...s.requests, { id: "pedro", name: "pedroh", hue: 150 }] })); get().log("pedroh pediu para entrar"); });
-  },
-  join: (name, code) => {
-    set({ waiting: true }); get().log(`Entrando na sala ${code}…`);
-    later(1800, () => { set({ waiting: false, room: code, role: "guest", members: [{ id: "h", name: "pedroh", host: true, hue: 150 }, { id: "b", name: "bia", hue: 60 }, { id: "me", name, you: true, hue: 295 }] }); get().log("Pedido aprovado pelo anfitrião"); toast("Você entrou na sala"); usePlayer.getState().play(sample(songs, 12, 5).map((t) => t.id), 0, `Sala ${code}`); });
-  },
-  leave: () => { set({ room: null, role: null, members: [], requests: [], suggestions: [] }); get().log("Você saiu da sala"); },
-}));
-function approve(id: string) {
-  const s = useLT.getState(); const m = s.requests.find((r) => r.id === id); if (!m) return;
-  useLT.setState({ requests: s.requests.filter((r) => r.id !== id), members: [...s.members, m] }); s.log(`${m.name} entrou na sala`);
-  later(5000, () => { if (!useLT.getState().members.some((x) => x.id === id)) return; const t = sample(songs, 1, Date.now())[0]; useLT.setState((x) => ({ suggestions: [...x.suggestions, { id: Date.now(), by: m.name, trackId: t.id }] })); useLT.getState().log(`${m.name} sugeriu "${t.title}"`); toast(`${m.name} sugeriu ${t.title}`); });
-}
+// ───────── Ouvir junto (sessão real: src/lib/lt/session.ts)
+export { useLT };
 
 export function TogetherPage() {
   const lt = useLT();
@@ -50,8 +21,6 @@ export function TogetherPage() {
   const [code, setCode] = useState(""); const [logs, setLogs] = useState(false);
   const openMenuAt = useUI((s) => s.openMenuAt);
   const cur = useCurrent(); const playing = usePlayer((s) => s.playing);
-  useEffect(() => { if (autoJoin && lt.requests.length) lt.requests.forEach((r) => approve(r.id)); }, [autoJoin, lt.requests.length]);
-  useEffect(() => { if (autoSug && lt.suggestions.length) { usePlayer.getState().addToQueue(lt.suggestions.map((s) => s.trackId)); useLT.setState({ suggestions: [] }); } }, [autoSug, lt.suggestions.length]);
   const status = { off: ["Desconectado", "bg-t3"], connecting: ["Conectando…", "bg-warn"], on: ["Conectado", "bg-ok"], error: ["Erro de conexão", "bg-danger"] }[lt.conn];
   const nameOk = username.trim().length > 0;
   return (
@@ -61,7 +30,7 @@ export function TogetherPage() {
         <span className="inline-flex items-center gap-2 h-8 px-3 rounded-full bg-s2 text-[0.84rem] font-medium"><span className={cx("size-2 rounded-full", status[1], lt.conn === "connecting" && "animate-pulse")} />{status[0]}</span>
         <IconBtn label="Registros de conexão" onClick={() => setLogs(true)}><ScrollText /></IconBtn>
         <IconBtn label="Configurações do Ouvir junto" onClick={() => nav("settings/together_settings")}><Settings /></IconBtn>
-        {lt.conn === "on" ? <Btn variant="outline" icon={<WifiOff />} onClick={lt.disconnect}>Desconectar</Btn> : <Btn variant="primary" icon={lt.conn === "connecting" ? <Spinner /> : <Wifi />} disabled={lt.conn === "connecting"} onClick={lt.connect}>Conectar</Btn>}
+        {lt.conn === "on" ? <Btn variant="outline" icon={<WifiOff />} onClick={lt.disconnect}>Desconectar</Btn> : <Btn variant="primary" icon={lt.conn === "connecting" ? <Spinner /> : <Wifi />} disabled={lt.conn === "connecting"} onClick={() => lt.connect().catch(() => {})}>Conectar</Btn>}
       </div>
       <p className="text-t2 max-w-2xl mb-7">Ouça música com seus amigos em tempo real. Crie uma sala para ser o anfitrião ou entre numa sala existente com um código.</p>
 
@@ -74,8 +43,8 @@ export function TogetherPage() {
                 <button title="Copiar código" onClick={() => { copyText(lt.room!); toast("Código copiado"); }} className="h-9 px-3.5 rounded-xl bg-white/15 hover:bg-white/25 font-mono font-bold tracking-[0.25em] text-[1.1rem] inline-flex items-center gap-2">{lt.room}<Copy className="size-4" /></button></div>
               {cur && <div className="relative flex items-center gap-5"><Cover hue={cur.hue} seed={cur.seed} src={cur.art} className="size-28 rounded-2xl shadow-2xl" /><div className="min-w-0 flex-1"><div className="text-white/70 text-[0.8rem] font-semibold uppercase tracking-wider flex items-center gap-2">{playing && <Eq />}Tocando para {lt.members.length} {lt.members.length === 1 ? "pessoa" : "pessoas"}</div><div className="text-[1.6rem] font-bold tracking-tight truncate">{cur.title}</div><div className="text-white/75 truncate">{artistOf(cur)}</div></div></div>}
               <div className="relative flex gap-2 mt-6">
-                {lt.role === "guest" && <Btn className="!bg-white/15 !text-white" icon={<RefreshCw />} onClick={() => toast("Ressincronizado com o anfitrião")}>Ressincronizar</Btn>}
-                <Btn className="!bg-white/15 !text-white" icon={<Share2 />} onClick={() => { copyText(`https://metromusic.app/together/${lt.room}`); toast("Convite copiado"); }}>Convidar</Btn>
+                {lt.role === "guest" && <Btn className="!bg-white/15 !text-white" icon={<RefreshCw />} onClick={() => lt.resync()}>Ressincronizar</Btn>}
+                <Btn className="!bg-white/15 !text-white" icon={<Share2 />} onClick={() => { copyText(`Entre na minha sala do Ouvir junto no MetroMusic (ou no Metrolist) com o código ${lt.room}`); toast("Convite copiado"); }}>Convidar</Btn>
                 <div className="flex-1" /><Btn variant="danger" className="!bg-danger/30 !text-white" icon={<DoorOpen />} onClick={() => { lt.leave(); toast("Você saiu da sala"); }}>Sair da sala</Btn>
               </div>
             </div>
@@ -95,27 +64,27 @@ export function TogetherPage() {
                   {m.host && <Badge tone="accent"><Crown />Anfitrião</Badge>}{m.you && <Badge>Você</Badge>}
                   {lt.role === "host" && !m.you && <IconBtn label="Gerenciar pessoa" size={30} onClick={(e) => openMenuAt(e.currentTarget, [
                     { header: true, label: m.name },
-                    { label: m.muted ? "Reativar som" : "Silenciar", icon: m.muted ? <Volume2 /> : <VolumeX />, onClick: () => useLT.setState((s) => ({ members: s.members.map((x) => (x.id === m.id ? { ...x, muted: !x.muted } : x)) })) },
-                    { label: "Transferir a sala", icon: <Crown />, onClick: () => { useLT.setState((s) => ({ role: "guest", members: s.members.map((x) => ({ ...x, host: x.id === m.id })) })); toast(`${m.name} agora é o anfitrião`); } },
+                    { label: m.muted ? "Reativar som" : "Silenciar", icon: m.muted ? <Volume2 /> : <VolumeX />, onClick: () => lt.mute(m.id) },
+                    { label: "Transferir a sala", icon: <Crown />, onClick: () => lt.transfer(m.id) },
                     { divider: true },
-                    { label: "Remover da sala", icon: <UserMinus />, danger: true, onClick: () => { useLT.setState((s) => ({ members: s.members.filter((x) => x.id !== m.id) })); lt.log(`${m.name} foi removido`); } },
-                    { label: "Bloquear para sempre", icon: <Ban />, danger: true, onClick: () => { useLT.setState((s) => ({ members: s.members.filter((x) => x.id !== m.id), blocked: [...s.blocked, m.name] })); toast(`${m.name} foi bloqueado`); } },
+                    { label: "Remover da sala", icon: <UserMinus />, danger: true, onClick: () => lt.kick(m.id) },
+                    { label: "Bloquear para sempre", icon: <Ban />, danger: true, onClick: () => lt.block(m.name) },
                   ])}><Ellipsis /></IconBtn>}
                 </motion.div>))}</AnimatePresence></div></div>
-            {lt.role === "host" && lt.requests.length > 0 && <div><SectionTitle>Pedidos de entrada</SectionTitle><div className="rounded-2xl bg-s1 p-1.5">{lt.requests.map((r) => <div key={r.id} className="flex items-center gap-3 px-2.5 h-14"><div className="size-9 rounded-full grid place-items-center font-bold text-white" style={{ background: `oklch(0.6 0.15 ${r.hue})` }}>{r.name[0].toUpperCase()}</div><span className="font-medium flex-1">{r.name}</span><Btn size="sm" variant="ghost" onClick={() => useLT.setState((s) => ({ requests: s.requests.filter((x) => x.id !== r.id) }))}>Recusar</Btn><Btn size="sm" variant="primary" icon={<Check />} onClick={() => approve(r.id)}>Aprovar</Btn></div>)}</div></div>}
-            {lt.role === "host" && lt.suggestions.length > 0 && <div><SectionTitle>Sugestões pendentes</SectionTitle><div className="rounded-2xl bg-s1 p-1.5">{lt.suggestions.map((s) => { const t = getTrack(s.trackId)!; return <div key={s.id} className="flex items-center gap-3 px-2.5 h-15"><Cover hue={t.hue} seed={t.seed} src={t.art} className="size-10 rounded-md" /><div className="min-w-0 flex-1"><div className="truncate font-medium">{t.title}</div><div className="truncate text-t3 text-[0.8rem]">{artistOf(t)} · sugerida por {s.by}</div></div><IconBtn label="Recusar" size={32} onClick={() => useLT.setState((x) => ({ suggestions: x.suggestions.filter((y) => y.id !== s.id) }))}><X /></IconBtn><IconBtn label="Aprovar e pôr na fila" size={32} className="!bg-accent !text-accent-fg" onClick={() => { usePlayer.getState().addToQueue([s.trackId]); useLT.setState((x) => ({ suggestions: x.suggestions.filter((y) => y.id !== s.id) })); }}><Check /></IconBtn></div>; })}</div></div>}
-            {lt.blocked.length > 0 && <div><SectionTitle>Bloqueados</SectionTitle><div className="rounded-2xl bg-s1 p-1.5">{lt.blocked.map((b) => <div key={b} className="flex items-center gap-3 px-3 h-12"><Ban className="size-4 text-t3" /><span className="flex-1">{b}</span><Btn size="sm" variant="ghost" onClick={() => useLT.setState((s) => ({ blocked: s.blocked.filter((x) => x !== b) }))}>Desbloquear</Btn></div>)}</div></div>}
+            {lt.role === "host" && lt.requests.length > 0 && <div><SectionTitle>Pedidos de entrada</SectionTitle><div className="rounded-2xl bg-s1 p-1.5">{lt.requests.map((r) => <div key={r.id} className="flex items-center gap-3 px-2.5 h-14"><div className="size-9 rounded-full grid place-items-center font-bold text-white" style={{ background: `oklch(0.6 0.15 ${r.hue})` }}>{r.name[0].toUpperCase()}</div><span className="font-medium flex-1">{r.name}</span><Btn size="sm" variant="ghost" onClick={() => lt.reject(r.id)}>Recusar</Btn><Btn size="sm" variant="primary" icon={<Check />} onClick={() => lt.approve(r.id)}>Aprovar</Btn></div>)}</div></div>}
+            {lt.role === "host" && lt.suggestions.length > 0 && <div><SectionTitle>Sugestões pendentes</SectionTitle><div className="rounded-2xl bg-s1 p-1.5">{lt.suggestions.map((s) => { const t = getTrack(s.trackId)!; return <div key={s.id} className="flex items-center gap-3 px-2.5 h-15"><Cover hue={t.hue} seed={t.seed} src={t.art} className="size-10 rounded-md" /><div className="min-w-0 flex-1"><div className="truncate font-medium">{t.title}</div><div className="truncate text-t3 text-[0.8rem]">{artistOf(t)} · sugerida por {s.by}</div></div><IconBtn label="Recusar" size={32} onClick={() => lt.rejectSuggestion(s.sid)}><X /></IconBtn><IconBtn label="Aprovar e pôr na fila" size={32} className="!bg-accent !text-accent-fg" onClick={() => lt.approveSuggestion(s.sid)}><Check /></IconBtn></div>; })}</div></div>}
+            {lt.blocked.length > 0 && <div><SectionTitle>Bloqueados</SectionTitle><div className="rounded-2xl bg-s1 p-1.5">{lt.blocked.map((b) => <div key={b} className="flex items-center gap-3 px-3 h-12"><Ban className="size-4 text-t3" /><span className="flex-1">{b}</span><Btn size="sm" variant="ghost" onClick={() => lt.unblock(b)}>Desbloquear</Btn></div>)}</div></div>}
           </div>
         </div>
       ) : lt.waiting ? (
-        <div className="grid place-items-center h-72 rounded-3xl bg-s1"><div className="text-center"><Spinner className="size-8 mx-auto mb-4 text-accent" /><div className="text-[1.15rem] font-semibold">Aguardando a aprovação do anfitrião…</div><Btn variant="ghost" className="mt-4" onClick={() => { timers.forEach(clearTimeout); useLT.setState({ waiting: false }); }}>Cancelar</Btn></div></div>
+        <div className="grid place-items-center h-72 rounded-3xl bg-s1"><div className="text-center"><Spinner className="size-8 mx-auto mb-4 text-accent" /><div className="text-[1.15rem] font-semibold">Aguardando a aprovação do anfitrião…</div><Btn variant="ghost" className="mt-4" onClick={() => lt.cancelJoin()}>Cancelar</Btn></div></div>
       ) : (
         <div className={cx("grid grid-cols-2 max-[900px]:grid-cols-1 gap-5 transition-opacity", lt.conn !== "on" && "opacity-50 pointer-events-none")}>
           <div className="col-span-full rounded-2xl bg-s1 p-5 flex items-center gap-4"><div className="flex-1"><div className="font-semibold mb-2">Nome de usuário</div><TextField value={username} onChange={(v) => setSetting("ltUsername", v)} placeholder="Como os outros veem você" className="max-w-sm" /></div>{!nameOk && <span className="text-danger text-[0.86rem]">É preciso informar um nome</span>}</div>
-          <div className="rounded-3xl bg-s1 p-7 flex flex-col"><div className="size-14 rounded-2xl bg-accent-soft text-accent grid place-items-center mb-5"><Plus className="size-7" /></div><div className="text-[1.3rem] font-bold tracking-tight">Criar sala</div><p className="text-t3 mt-1 mb-6 flex-1">Crie uma sala e compartilhe o código com seus amigos. Você controla a fila e a reprodução.</p><Btn variant="primary" size="lg" disabled={!nameOk} onClick={() => lt.create(username)}>Criar sala</Btn></div>
+          <div className="rounded-3xl bg-s1 p-7 flex flex-col"><div className="size-14 rounded-2xl bg-accent-soft text-accent grid place-items-center mb-5"><Plus className="size-7" /></div><div className="text-[1.3rem] font-bold tracking-tight">Criar sala</div><p className="text-t3 mt-1 mb-6 flex-1">Crie uma sala e compartilhe o código com seus amigos. Você controla a fila e a reprodução.</p><Btn variant="primary" size="lg" disabled={!nameOk} onClick={() => lt.create(username).catch(() => {})}>Criar sala</Btn></div>
           <div className="rounded-3xl bg-s1 p-7 flex flex-col"><div className="size-14 rounded-2xl bg-accent-soft text-accent grid place-items-center mb-5"><LogIn className="size-7" /></div><div className="text-[1.3rem] font-bold tracking-tight">Entrar numa sala</div><p className="text-t3 mt-1 mb-4 flex-1">Digite o código que o anfitrião compartilhou.</p>
-            <input value={code} onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))} placeholder="CÓDIGO" className="h-14 rounded-xl bg-s2 text-center font-mono text-[1.5rem] font-bold tracking-[0.4em] placeholder:text-t3/50 mb-3 border border-transparent focus:border-accent/50" />
-            <Btn size="lg" disabled={!nameOk || code.length < 6} onClick={() => lt.join(username, code)}>{code.length > 0 && code.length < 6 ? "Código inválido" : "Entrar"}</Btn></div>
+            <input value={code} onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10))} placeholder="CÓDIGO" className="h-14 rounded-xl bg-s2 text-center font-mono text-[1.5rem] font-bold tracking-[0.4em] placeholder:text-t3/50 mb-3 border border-transparent focus:border-accent/50" />
+            <Btn size="lg" disabled={!nameOk || code.length < 4} onClick={() => lt.join(username, code).catch(() => {})}>{code.length > 0 && code.length < 4 ? "Código inválido" : "Entrar"}</Btn></div>
         </div>
       )}
       {lt.conn === "off" && !lt.room && <div className="mt-5 text-t3 text-[0.84rem]">Conecte-se ao servidor para criar ou entrar numa sala. Conectado sem estar numa sala, o Ouvir junto se desconecta após 30 minutos em segundo plano.</div>}
