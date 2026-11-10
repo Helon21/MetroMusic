@@ -1,3 +1,4 @@
+import { copyLink } from "./share";
 import { useLT } from "./lt/session";
 import { CircleUser, Copy, Disc3, Download, FileDown, Heart, HeartOff, Info, ListEnd, ListPlus, ListStart, Pencil, Pin, PinOff, Play, Plus, Radio, RefreshCw, Share2, Shuffle, Trash2, Waypoints, Image, Clock, CloudUpload, Podcast, Users, BookmarkPlus, BookmarkCheck, Import } from "lucide-react";
 import { accountProviderOf, addToAccountPlaylist, loggedIn, providerName, refreshAccountPlaylists, removeFromAccountPlaylist, useAccountPlaylists } from "./accountPlaylists";
@@ -55,7 +56,7 @@ function downloadItem(ids: string[]): MenuItem {
     : { label: "Baixar", icon: <Download />, hint: ids.length > 1 ? String(ids.length) : undefined, onClick: () => { L().download(ids); toast(ids.length > 1 ? `Baixando ${ids.length} músicas` : "Baixando…"); } };
 }
 const share = (title: string, kind: string, id: string): MenuItem => ({ label: "Compartilhar", icon: <Share2 />, sub: [
-  { label: "Copiar link", icon: <Copy />, onClick: () => { copyText(`https://metromusic.app/${kind}/${id}`); toast("Link copiado"); } },
+  { label: "Copiar link", icon: <Copy />, onClick: () => { copyLink(kind, id, title); } },
   { label: "Mais opções…", icon: <Share2 />, onClick: () => openDialog("share", { title, kind, id }) },
 ] });
 

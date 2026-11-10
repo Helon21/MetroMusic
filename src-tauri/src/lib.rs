@@ -14,6 +14,7 @@ mod commands;
 mod discord;
 mod files;
 mod local;
+mod links;
 mod importer;
 mod images;
 mod downloads;
@@ -228,7 +229,7 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             toggle_mini, show_main_window, set_close_to_tray, update_now_playing, dev_flag,
-            files::file_read_text, files::file_write_text, settings::settings_load, settings::settings_save, commands::content_prefs_set, commands::audio_quality_set, ai::ai_translate, discord::discord_set, commands::provider_health, commands::source_candidates, commands::spotify_canvas, local::local_scan, local::local_index_load, local::local_probe, importer::import_match, images::image_fetch, images::image_cache_stats, images::image_cache_clear, downloads::download_track, downloads::download_delete, downloads::download_missing, local::local_watch, awake::keep_awake_set,
+            files::file_read_text, files::file_write_text, settings::settings_load, settings::settings_save, commands::content_prefs_set, commands::audio_quality_set, ai::ai_translate, discord::discord_set, commands::provider_health, commands::source_candidates, commands::spotify_canvas, local::local_scan, local::local_index_load, local::local_probe, importer::import_match, images::image_fetch, images::image_cache_stats, images::image_cache_clear, downloads::download_track, downloads::download_delete, downloads::download_missing, local::local_watch, awake::keep_awake_set, links::open_url,
             commands::search_online, commands::audio_play, commands::audio_pause, commands::audio_resume, commands::audio_seek,
             commands::audio_stop, commands::audio_set_volume, commands::audio_set_speed, commands::audio_set_eq,
             commands::audio_set_normalization, commands::audio_set_crossfade, commands::audio_advance, commands::audio_set_next,

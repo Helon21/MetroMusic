@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence } from "motion/react";
-import { AudioLines, Cast, Check, Copy, Download, FileSpreadsheet, FileText, Link, ListMusic, LogIn, Minus, Monitor, Plus, QrCode, Search, Send, Speaker, Tv, Upload } from "lucide-react";
+import { AudioLines, Cast, Check, Copy, Mail, MessageCircle, Users, Download, FileSpreadsheet, FileText, Link, ListMusic, LogIn, Minus, Monitor, Plus, QrCode, Search, Send, Speaker, Tv, Upload } from "lucide-react";
 import { albumOf, artistOf, getArtist, getLyrics, getTrack, registerTrack, sample, songs, SOURCES, sourceName, type ExtInfo, type SourceId } from "../lib/catalog";
 import { guessColumns, parseCsv, parseM3u, rowsToItems, type ImportItem } from "../lib/importers";
 import { parseMusicLink } from "../lib/links";
@@ -21,6 +21,9 @@ import { getSetting, setSetting, useSetting } from "../store/settings";
 import { nav, openDialog, toast, useUI } from "../store/ui";
 import { useDiscord } from "../lib/discord";
 import { installUpdate, skipVersion, useUpdate } from "../lib/updater";
+import { linkOf, openExternal, playlistAsText } from "../lib/share";
+import { mailUrl, shareText, telegramUrl, universalUrl, whatsappUrl } from "../lib/shareLinks";
+import { useLT } from "../lib/lt/session";
 import { fmtBytes, parseNotes } from "../lib/releaseNotes";
 import { useLyr } from "./Lyrics";
 import { ConfirmFooter } from "./overlays";
@@ -103,15 +106,60 @@ function Confirm({ props, close }: P) {
   return <Modal title={props.title} onClose={close} width={420} footer={<ConfirmFooter onCancel={close} onConfirm={() => { props.action(); close(); }} confirm={props.confirm} danger={props.danger} />}><p className="text-t2 leading-relaxed">{props.text}</p></Modal>;
 }
 
+/** Compartilhar: link real do serviço (ou link universal), WhatsApp, Telegram, e-mail, código QR e a sala do Ouvir junto. */
 function Share({ props, close }: P) {
-  const url = `https://metromusic.app/${props.kind}/${props.id}`;
+  const kind = String(props.kind ?? "track"), id = String(props.id), title = String(props.title ?? "");
+  const direct = linkOf(kind, id);
+  const universalAvail = universalUrl(direct, kind as any);
   const [universal, setUniversal] = useState(true);
+  const [qr, setQr] = useState<string | null>(null);
+  const [showQr, setShowQr] = useState(false);
+  const room = useLT((s) => s.role);
+  const t = kind === "track" ? getTrack(id) : undefined;
+  const url = direct && universal && universalAvail ? universalAvail : direct;
+  const label = t ? `${t.title} — ${artistOf(t)}` : title;
+  const listText = !direct && kind === "playlist" ? playlistAsText(id, title) : null;
+  const text = url ? shareText(label, url) : listText ?? "";
+  useEffect(() => {
+    let dead = false;
+    if (!showQr || !url) return;
+    import("qrcode").then((Q) => Q.toDataURL(url, { margin: 1, width: 360, color: { dark: "#0b0b12", light: "#ffffff" } })).then((d) => !dead && setQr(d)).catch(() => !dead && setQr(null));
+    return () => { dead = true; };
+  }, [showQr, url]);
+  const action = (name: string, icon: ReactNode, onClick: () => void, disabled = false) => (
+    <button key={name} disabled={disabled} onClick={onClick} className="flex flex-col items-center gap-2 py-4 rounded-xl hover:bg-s2 disabled:opacity-40 disabled:pointer-events-none text-[0.84rem] transition-colors"><span className="size-10 rounded-full bg-s2 grid place-items-center text-accent [&>svg]:size-5">{icon}</span>{name}</button>
+  );
   return (
-    <Modal title="Compartilhar" subtitle={props.title} onClose={close}>
-      <div className="flex items-center gap-2 p-1.5 pl-4 rounded-full bg-s2 mb-4"><Link className="size-4 text-t3 shrink-0" /><span className="flex-1 truncate text-[0.88rem] select-text">{universal ? url.replace("metromusic.app", "song.link") : url}</span><Btn size="sm" variant="primary" icon={<Copy />} onClick={() => { copyText(url); toast("Link copiado"); close(); }}>Copiar</Btn></div>
-      <div className="flex items-center gap-3 p-3.5 rounded-xl bg-s2 mb-4"><div className="flex-1"><div className="font-medium">Link universal</div><div className="text-t3 text-[0.82rem]">Quem receber escolhe em qual serviço abrir.</div></div><Switch on={universal} onChange={setUniversal} /></div>
-      <div className="grid grid-cols-4 gap-2">
-        {([["Mensagem", <Send />], ["Código QR", <QrCode />], ["Ouvir junto", <ListMusic />], ["Arquivo", <FileText />]] as [string, ReactNode][]).map(([l, i]) => <button key={l} onClick={() => { toast(`Compartilhado via ${l.toLowerCase()}`); close(); }} className="flex flex-col items-center gap-2 py-4 rounded-xl hover:bg-s2 text-t2 hover:text-t1 text-[0.8rem] [&>svg]:size-6">{i}{l}</button>)}
+    <Modal title="Compartilhar" subtitle={label} onClose={close}>
+      {url ? (
+        <div className="flex items-center gap-2 p-1.5 pl-4 rounded-full bg-s2 mb-4"><Link className="size-4 text-t3 shrink-0" /><span className="flex-1 truncate text-[0.88rem] select-text">{url}</span><Btn size="sm" variant="primary" icon={<Copy />} onClick={() => { copyText(url); toast("Link copiado"); }}>Copiar</Btn></div>
+      ) : (
+        <div className="p-3.5 rounded-xl bg-s2 mb-4 text-[0.86rem] text-t2">
+          {listText ? <>Esta playlist é só sua, então não tem um link. Dá para enviar a <b>lista de músicas</b> como texto.</>
+            : <>{kind === "track" && t?.ext?.provider === "local" ? "Este é um arquivo do seu computador, então não tem um link público." : "Isto não tem um link público para compartilhar."}</>}
+          {listText && <div className="mt-3"><Btn size="sm" variant="primary" icon={<Copy />} onClick={() => { copyText(listText); toast("Lista de músicas copiada"); }}>Copiar lista de músicas</Btn></div>}
+        </div>
+      )}
+      {universalAvail && (
+        <div className="flex items-center gap-3 p-3.5 rounded-xl bg-s2 mb-4"><div className="flex-1"><div className="font-medium">Link universal</div><div className="text-t3 text-[0.82rem]">Quem receber escolhe em qual serviço abrir (usa o song.link).</div></div><Switch on={universal} onChange={setUniversal} /></div>
+      )}
+      {showQr && url && (
+        <div className="flex flex-col items-center gap-2 mb-4">
+          <div className="p-2.5 rounded-2xl bg-white">{qr ? <img src={qr} alt="Código QR do link" className="size-44" /> : <div className="size-44 grid place-items-center"><Spinner className="size-6" /></div>}</div>
+          <div className="text-t3 text-[0.8rem]">Aponte a câmera do celular para abrir o link.</div>
+        </div>
+      )}
+      <div className="grid grid-cols-3 gap-2">
+        {action("WhatsApp", <MessageCircle />, () => { openExternal(whatsappUrl(text)); }, !text)}
+        {action("Telegram", <Send />, () => { if (url) openExternal(telegramUrl(url, label)); }, !url)}
+        {action("E-mail", <Mail />, () => { openExternal(mailUrl(label, text)); }, !text)}
+        {action(showQr ? "Ocultar QR" : "Código QR", <QrCode />, () => setShowQr((v) => !v), !url)}
+        {kind === "track" && action(room === "host" ? "Pôr na fila da sala" : "Sugerir à sala", <Users />, () => {
+          if (!room) { toast("Entre numa sala do Ouvir junto primeiro"); close(); nav("together"); return; }
+          if (room === "host") { usePlayer.getState().addToQueue([id]); toast("Adicionada à fila da sala"); } else useLT.getState().suggest(id);
+          close();
+        })}
+        {action("Copiar texto", <FileText />, () => { copyText(text); toast("Texto copiado"); }, !text)}
       </div>
     </Modal>
   );
