@@ -82,6 +82,7 @@ Tudo o que precisa de conta é opcional: dá para usar só com a busca e a repro
 | Aparência | Sistema |
 | --- | --- |
 | Temas, paletas e fundos "Galáxia" e desfocados | Atualização automática pelo GitHub, sem instalador |
+| Modo leve automático para PCs sem placa de vídeo | Bandeja, atalhos globais, mídia do sistema (MPRIS) |
 | Idiomas: português e inglês | Bandeja, atalhos globais, mídia do sistema (MPRIS), iniciar com o sistema |
 | Backup e restauração das suas coisas | Proxy HTTP e SOCKS5, configurações em arquivo e segredos separados |
 

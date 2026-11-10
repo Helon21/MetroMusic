@@ -151,3 +151,16 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border: 0; bo
 .mask-fade-x { mask-image: linear-gradient(to right, transparent, #000 24px, #000 calc(100% - 24px), transparent); }
 .mask-fade-y { mask-image: linear-gradient(to bottom, transparent, #000 12%, #000 82%, transparent); }
 .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* ───────── Janela escondida ou sem foco: pausa as animações (qualquer PC) */
+:root[data-idle="1"] *, :root[data-idle="1"] *::before, :root[data-idle="1"] *::after { animation-play-state: paused !important; }
+
+/* ───────── Modo leve (PC sem GPU ou lento): tira o que custa caro para desenhar por software */
+:root[data-perf="low"] .drift, :root[data-perf="low"] .drift-rev { animation: none !important; }
+:root[data-perf="low"] .skeleton { animation: none !important; background: var(--s2); }
+:root[data-perf="low"] * { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; text-shadow: none !important; }
+:root[data-perf="low"] [class*="blur-"]:not([class*="backdrop-blur"]) { filter: none !important; }
+:root[data-perf="low"] [class*="mix-blend-"] { mix-blend-mode: normal !important; }
+:root[data-perf="low"] .mask-fade-y { -webkit-mask-image: none !important; mask-image: none !important; }
+:root[data-perf="low"] [class*="shadow-2xl"], :root[data-perf="low"] [class*="shadow-xl"] { box-shadow: 0 2px 8px #0005 !important; }
+:root[data-perf="low"] [data-line] { filter: none !important; will-change: auto !important; }

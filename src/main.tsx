@@ -12,6 +12,7 @@ import { startScheduler } from "./lib/scheduler";
 import { startDiscord } from "./lib/discord";
 import { startUpdater } from "./lib/updater";
 import { startLocal } from "./lib/local";
+import { startPerf } from "./lib/perf";
 import { verifyDownloads } from "./lib/downloads";
 import { getPlaylist, loadExternalTracks } from "./lib/catalog";
 import { initBackend, initHistoryTracker, usePlayer } from "./store/player";
@@ -46,6 +47,7 @@ if (new URLSearchParams(location.search).has("mini") || location.hash === "#mini
   startScheduler();
   startDiscord();
   startUpdater();
+  startPerf();
   startLocal();
   verifyDownloads();
   // primeiro uso: mostra como conectar os serviços (some para sempre depois de fechar, ou se já houver conta conectada)

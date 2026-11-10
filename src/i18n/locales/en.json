@@ -724,5 +724,10 @@
   "Capa clara deixa as estrelas mais discretas; capa escura, mais visíveis": "A light cover makes the stars subtler; a dark cover makes them more visible",
   "Mostra o vídeo em loop do Spotify Canvas sobre a capa quando a faixa tiver um (precisa da conta do Spotify)": "Shows the looping Spotify Canvas video over the cover when the track has one (needs a Spotify account)",
   "Mostrar o aviso de nova versão": "Show the new version notice",
-  "Ver e atualizar": "View and update"
+  "Ver e atualizar": "View and update",
+  "Automático (recomendado)": "Automatic (recommended)",
+  "Automático liga o modo leve sozinho em PCs sem placa de vídeo ou quando o app fica lento. Leve desliga desfoques, sombras grandes, animações decorativas e vídeos de fundo.": "Automatic turns light mode on by itself on PCs without a graphics card or when the app gets slow. Light turns off blurs, large shadows, decorative animations and background videos.",
+  "Completo": "Full",
+  "Desempenho visual": "Visual performance",
+  "Leve": "Light"
 }

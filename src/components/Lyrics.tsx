@@ -1,3 +1,4 @@
+import { useLowPerf } from "../lib/perf";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { Copy, Ellipsis, Languages, MicVocal, Pencil, RefreshCw, Search, Share2, Timer, Type, Image as ImageIcon } from "lucide-react";
@@ -102,8 +103,9 @@ export function LyricsView({ track, scale = 1, className }: { track: Track; scal
   const size = useSetting<number>("lyricsSize") * scale, spacing = useSetting<number>("lyricsSpacing");
   const align = useSetting<string>("lyricsPosition"), animSetting = useSetting<string>("lyricsAnimation");
   // "Letras MetroMusic" desligado: letra clássica, só a linha ativa em destaque (sem palavra a palavra, desfoque, brilho nem pontos de pausa)
+  const low = useLowPerf();
   const metro = useSetting<boolean>("expMetroLyrics") !== false;
-  const glow = useSetting<boolean>("lyricsGlow") && metro, blur = useSetting<boolean>("lyricsBlurInactive") && metro, auto = useSetting<boolean>("lyricsAutoScroll");
+  const glow = useSetting<boolean>("lyricsGlow") && metro && !low, blur = useSetting<boolean>("lyricsBlurInactive") && metro && !low, auto = useSetting<boolean>("lyricsAutoScroll");
   const clickSeek = useSetting<boolean>("lyricsClickSeek"), gaps = useSetting<boolean>("lyricsIntervalIndicator") && metro, agents = useSetting<boolean>("lyricsAgentPositioning");
   const anim = metro ? animSetting : "none";
   const box = useRef<HTMLDivElement>(null);
@@ -156,7 +158,8 @@ export function LyricsView({ track, scale = 1, className }: { track: Track; scal
                   marginBottom: `${(spacing - 0.6) * 0.8}em`, fontSize: l.bg && agents ? "0.72em" : undefined,
                   opacity: !lyrics.synced ? 0.9 : isActive ? 1 : past ? 0.32 : Math.max(0.22, 0.5 - dist * 0.07),
                   transform: metro ? (isActive ? "scale(1)" : "scale(0.94)") : undefined,
-                  filter: blur && lyrics.synced && !isActive && !free ? `blur(${Math.min(3.5, dist * 0.7)}px)` : undefined,
+                  // o desfoque só vale nas linhas próximas: as distantes já estão quase invisíveis e cada filtro custa uma camada
+                  filter: blur && lyrics.synced && !isActive && !free && dist <= 4 ? `blur(${Math.min(3.5, dist * 0.7)}px)` : undefined,
                   textShadow: isActive && glow ? "0 0 28px color-mix(in oklch, var(--t1) 40%, transparent)" : undefined,
                 }}>
                 {isActive && anim !== "none" ? <ActiveWords l={l} anim={anim} offset={offset} rom={romAsMain ? rom : undefined} /> : (romAsMain ? (rom(l.text) ?? l.text) : l.text)}
@@ -185,7 +188,8 @@ export function LyricLineNow({ track, className }: { track: Track; className?: s
   const lyrics = useMemo(() => getLyrics(track), [track, real.version]);
   const offset = useLyr((s) => s.offset[track.id] ?? 0);
   const { active } = useActiveLine(lyrics?.lines ?? [], !!lyrics?.synced, offset);
-  const smooth = useSetting<boolean>("expSmoothInline") !== false;
+  const lowPerf = useLowPerf(); // sempre chamado: um hook dentro de um `&&` quebra a ordem dos hooks
+  const smooth = useSetting<boolean>("expSmoothInline") !== false && !lowPerf;
   const l = lyrics?.synced && active >= 0 ? lyrics.lines[active] : null;
   const pos = useSmoothTime(offset, !!l);
   const rom = useRomanizer(lyrics?.lines.map((x) => x.text) ?? []);

@@ -1,3 +1,4 @@
+import { useLowPerf } from "./perf";
 // Arte animada (Spotify Canvas): busca o vídeo em loop da faixa que toca, se a conta do Spotify estiver conectada.
 import { useEffect, useState } from "react";
 import { invoke, isTauri } from "./native";
@@ -21,7 +22,8 @@ async function fetchCanvas(t: Track): Promise<string | null> {
 
 /** Endereço do vídeo do Canvas da faixa, ou `null` (sem Canvas, opção desligada, fora do app nativo ou Spotify desconectado). */
 export function useCanvas(t?: Track | null): string | null {
-  const on = useSetting<boolean>("spotifyCanvas") !== false && useSetting<boolean>("animatedCovers") !== false;
+  const low = useLowPerf();
+  const on = useSetting<boolean>("spotifyCanvas") !== false && useSetting<boolean>("animatedCovers") !== false && !low;
   const [url, setUrl] = useState<string | null>(() => (t && cache.get(t.id)) || null);
   useEffect(() => {
     if (!on || !isTauri || !t) { setUrl(null); return; }

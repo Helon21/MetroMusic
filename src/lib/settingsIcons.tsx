@@ -13,7 +13,7 @@ import type { Item } from "./settingsSchema";
 const BY_KEY: Record<string, LucideIcon> = {
   // aparência
   pureBlack: Contrast, appBackground: Sparkles, density: Rows3, defaultTab: House, defaultLibTab: Library, gridSize: LayoutGrid, showTogetherInSidebar: Users, immersiveHeader: Image,
-  cropAlbumArt: Crop, artworkQuality: Images, reduceMotion: Wind, playerBackground: Layers, playerButtons: Palette, sliderStyle: SlidersHorizontal, playerTextAlign: AlignLeft,
+  visualPerformance: Gauge, cropAlbumArt: Crop, artworkQuality: Images, reduceMotion: Wind, playerBackground: Layers, playerButtons: Palette, sliderStyle: SlidersHorizontal, playerTextAlign: AlignLeft,
   hidePlayerThumbnail: EyeOff, legacyQualityLabel: Tag, liveBitrate: Activity, animatedCovers: Film, miniPlayerBackground: PanelBottom, lyricsPosition: AlignCenter, lyricsSize: Type,
   lyricsSpacing: ArrowDownUp, lyricsAnimation: Wand2, lyricsGlow: Sun, lyricsBlurInactive: Droplets, lyricsUnderCover: ListEnd, lyricsAutoScroll: ArrowDownUp, lyricsClickSeek: MousePointerClick,
   lyricsIntervalIndicator: Ellipsis, lyricsAgentPositioning: MicVocal, "settings/romanization": Languages, "settings/lyrics_providers": ScrollText, "settings/ai": Bot, equalizer: SlidersHorizontal,

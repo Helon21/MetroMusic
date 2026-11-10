@@ -1,3 +1,4 @@
+import { isLowPerf } from "./perf";
 // Relógio suave da reprodução. O motor informa a posição 4 vezes por segundo (e a simulação, 10);
 // para a letra acompanhar a fala sem "pulinhos", interpolamos entre os avisos com o relógio do navegador.
 import { useEffect, useRef, useState } from "react";
@@ -6,6 +7,8 @@ import { getSetting } from "../store/settings";
 
 /** Intervalo mínimo entre quadros a 60 fps, com folga para a variação do relógio do quadro. */
 const FRAME_60 = 1000 / 60 - 1.5;
+/** Modo leve: a letra anima a 30 quadros por segundo. */
+const FRAME_30 = 1000 / 30 - 2;
 import type { LyricLine } from "./catalog";
 
 let a = { pos: 0, at: performance.now(), running: false, speed: 1 };
@@ -37,7 +40,7 @@ export function useSmoothTime(offset = 0, enabled = true) {
     const f = (now: number) => {
       id = requestAnimationFrame(f);
       // "Letras a 120 fps" desligado: em telas de taxa alta, atualiza no máximo ~60 vezes por segundo
-      if (!getSetting("lyricsHighRefresh") && now - last < FRAME_60) return;
+      if (now - last < (isLowPerf() ? FRAME_30 : !getSetting("lyricsHighRefresh") ? FRAME_60 : 0)) return;
       last = now;
       setT(playerNow() + offset);
     };

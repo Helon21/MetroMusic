@@ -2,6 +2,20 @@
 
 Cada versão publicada no GitHub usa o texto da sua seção como "o que mudou" (é o que aparece no aviso de atualização dentro do app).
 
+## 0.1.1
+
+Correção de desempenho: o app agora roda fluido em qualquer PC, inclusive sem placa de vídeo.
+
+### Desempenho
+- **Modo leve automático:** se o PC não tem GPU (desenho por software) ou o app percebe lentidão, ele desliga sozinho os desfoques gigantes, as sombras grandes, as animações decorativas e os vídeos de fundo. Quem tem GPU continua com todos os efeitos, sem mudança.
+- Nova opção em *Configurações › Aparência › Desempenho visual*: Automático (padrão), Completo ou Leve.
+- No modo leve, o fundo desfocado do Tocando agora vira um gradiente com a cor da capa, e a letra anima a 30 quadros por segundo.
+- Em qualquer PC: as animações pausam quando a janela está escondida ou sem foco, e o desfoque da letra só vale nas linhas próximas à atual.
+- Testado desenhando por software: o custo de CPU do Início caiu de 15% para 3% de um núcleo, e o do Tocando agora com desfoque em movimento, de 117% para 16%.
+
+### Linux
+- O AppImage traz o seu próprio WebKit e, em alguns sistemas (por exemplo com placa NVIDIA), ele não usa a GPU. O modo leve cobre esse caso. Quem prefere o WebKit do sistema pode usar o pacote `.deb` ou compilar a partir do código.
+
 ## 0.1.0
 
 Primeira versão pública do MetroMusic.

@@ -1,3 +1,4 @@
+import { useLowPerf } from "../lib/perf";
 import { useCanvas } from "../lib/canvas";
 import { useCoverTone } from "../lib/coverTone";
 import { useRef, useState } from "react";
@@ -314,9 +315,12 @@ function DetailsPanel({ t }: { t: Track }) {
 
 // ───────── Tocando agora (tela cheia)
 function Backdrop({ t }: { t: Track }) {
-  const mode = useSetting<string>("playerBackground");
-  const fade = useSetting<boolean>("expCoverFade"), canvasBg = useCanvas(fade ? t : null);
-  const adaptive = useSetting<boolean>("expGalaxyAdaptive"), mirrored = useSetting<boolean>("expGalaxyMirrored");
+  const chosen = useSetting<string>("playerBackground");
+  const low = useLowPerf();
+  // modo leve: nada de desfoque gigante nem vídeo de fundo; o desfoque vira gradiente com a cor da capa
+  const mode = low ? (chosen === "galaxyBlur" ? "galaxy" : chosen === "blur" || chosen === "movingBlur" ? "gradient" : chosen) : chosen;
+  const fade = useSetting<boolean>("expCoverFade") && !low, canvasBg = useCanvas(fade ? t : null);
+  const adaptive = useSetting<boolean>("expGalaxyAdaptive") && !low, mirrored = useSetting<boolean>("expGalaxyMirrored") && !low;
   const blurry = mode === "blur" || mode === "movingBlur" || mode === "galaxyBlur";
   // as cores e o brilho da capa só são lidos se alguma das duas opções pedir
   const tone = useCoverTone(t.art, (adaptive && (mode === "galaxy" || mode === "galaxyBlur")) || (mirrored && blurry));

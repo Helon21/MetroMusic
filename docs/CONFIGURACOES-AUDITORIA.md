@@ -60,8 +60,9 @@ Legenda: ✅ funciona e foi validado · 🟡 funciona com limite · 🔜 "Em bre
 | — | **Compartilhar**: link real de cada serviço (nada de domínio inventado), link universal (song.link), copiar, WhatsApp, Telegram, e-mail, código QR e sala do Ouvir junto; arquivo local e playlist sua explicam que não há link (a playlist vira lista de texto) | `scripts/tests/shareLinks.test.mjs` (5) + `cargo test links::` + Playwright |
 | — | **Capa grande do Tocando agora** busca a miniatura de até 1280×720 do YouTube (cai para 640×480 e 480×360 quando o vídeo não tem a maior; o placeholder cinza de 120×90 é rejeitado). As capas pequenas ficam como antes | `scripts/tests/art.test.mjs` (6) + Playwright com um vídeo que tem e outro que não tem a versão grande |
 | — | **Cursor de mãozinha** em tudo o que é clicável (botões ativos, links, controles, sliders); texto e botões desativados mantêm a seta | Playwright (37 de 37 botões ativos) |
+| — | **Desempenho visual** (Automático / Completo / Leve): detecta renderizador por software (WebGL: SwiftShader, llvmpipe…) e lentidão (menos de 40 quadros/s por 6 s seguidos, com a janela em foco) e liga o modo leve (sem desfoques gigantes, sombras grandes, animações decorativas nem vídeo de fundo; letra a 30 quadros/s). Com GPU boa nada muda. Também pausa as animações com a janela escondida | `scripts/tests/perfDetect.test.mjs` (6) + medição de CPU em Chromium com desenho por software: Início 15% → 3%, Tocando agora com desfoque em movimento 117% → 16%, galáxia com desfoque 76% → 20% de um núcleo; a detecção automática ligou o modo leve sozinha |
 
-Suítes: `pnpm test` roda `node --test scripts/tests/*.test.mjs` (59 testes) e `cargo test` (89 testes). Testes de rede ficam em `cargo test net_ -- --ignored`.
+Suítes: `pnpm test` roda `node --test scripts/tests/*.test.mjs` (65 testes) e `cargo test` (89 testes). Testes de rede ficam em `cargo test net_ -- --ignored`.
 
 **Pendente de validação com algo que só você tem:**
 - **Tradução por IA:** falta uma chave de API; a lógica está validada contra servidores falsos, mas não contra um provedor real.
