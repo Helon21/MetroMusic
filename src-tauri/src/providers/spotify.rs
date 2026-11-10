@@ -104,9 +104,10 @@ async fn device_authorize() -> Res<DeviceAuth> {
     let resp = CLIENT.post(DEVICE_AUTH_URL)
         .form(&[("client_id", DEVICE_CLIENT_ID), ("scope", DEVICE_SCOPE)])
         .send().await.map_err(err)?;
-    let ok = resp.status().is_success();
-    let v: Value = resp.json().await.map_err(err)?;
-    if !ok { return Err(format!("Spotify device auth: {}", v.get("error_description").or_else(|| v.get("error")).and_then(|e| e.as_str()).unwrap_or("falhou"))); }
+    let status = resp.status();
+    let text = resp.text().await.map_err(err)?;
+    let v: Value = serde_json::from_str(&text).map_err(|e| format!("device auth: JSON inválido: {e} | body: {}", text.chars().take(500).collect::<String>()))?;
+    if !status.is_success() { return Err(format!("Spotify device auth: {}", v.get("error_description").or_else(|| v.get("error")).and_then(|e| e.as_str()).unwrap_or("falhou"))); }
     Ok(DeviceAuth {
         device_code: v.get("device_code").and_then(|x| x.as_str()).ok_or("sem device_code")?.to_string(),
         user_code: v.get("user_code").and_then(|x| x.as_str()).ok_or("sem user_code")?.to_string(),
@@ -125,7 +126,8 @@ async fn poll_device_token(device_code: &str) -> Res<TokenResponse> {
             .form(&[("grant_type", "urn:ietf:params:oauth:grant-type:device_code"), ("device_code", device_code), ("client_id", DEVICE_CLIENT_ID)])
             .send().await.map_err(err)?;
         let status = resp.status();
-        let v: Value = resp.json().await.map_err(err)?;
+        let text = resp.text().await.map_err(err)?;
+        let v: Value = serde_json::from_str(&text).map_err(|e| format!("device token: JSON inválido: {e} | body: {}", text.chars().take(500).collect::<String>()))?;
         if status.is_success() {
             return Ok(TokenResponse {
                 access_token: v.get("access_token").and_then(|x| x.as_str()).ok_or("sem access_token")?.to_string(),
@@ -166,9 +168,10 @@ async fn refresh() -> Res<()> {
     let resp = CLIENT.post(format!("{ACCOUNTS}/api/token"))
         .form(&[("grant_type", "refresh_token"), ("refresh_token", &rt), ("client_id", DEVICE_CLIENT_ID)])
         .send().await.map_err(err)?;
-    let ok = resp.status().is_success();
-    let v: Value = resp.json().await.map_err(err)?;
-    if !ok {
+    let status = resp.status();
+    let text = resp.text().await.map_err(err)?;
+    let v: Value = serde_json::from_str(&text).map_err(|e| format!("refresh: JSON inválido: {e} | body: {}", text.chars().take(500).collect::<String>()))?;
+    if !status.is_success() {
         if v.get("error").and_then(|x| x.as_str()) == Some("invalid_grant") { logout(); }
         return Err(format!("Spotify refresh: {}", v.get("error_description").or_else(|| v.get("error")).and_then(|e| e.as_str()).unwrap_or("falhou")));
     }
@@ -203,17 +206,19 @@ async fn request(method: reqwest::Method, path: &str, query: &[(&str, String)]) 
         }
         let resp = req.send().await.map_err(err)?;
         let status = resp.status();
+        let headers = resp.headers().clone();
+        let text = resp.text().await.map_err(err)?;
+        let v: Value = serde_json::from_str(&text).map_err(|e| format!("API {path}: JSON inválido: {e} | body: {}", text.chars().take(500).collect::<String>()))?;
         if status.as_u16() == 401 && attempt == 0 { refresh().await?; continue; }
         if status.as_u16() == 429 {
-            let wait = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok()).unwrap_or(2).min(8);
+            let wait = headers.get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok()).unwrap_or(2).min(8);
             tokio::time::sleep(Duration::from_secs(wait)).await;
             continue;
         }
         if !status.is_success() {
-            let body: Value = resp.json().await.unwrap_or(Value::Null);
-            return Err(format!("Spotify HTTP {status}: {}", body.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("erro")));
+            return Err(format!("Spotify HTTP {status}: {}", v.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("erro")));
         }
-        return Ok(resp.json().await.unwrap_or(Value::Null));
+        return Ok(v);
     }
     Err("Spotify: muitas tentativas".into())
 }
