@@ -134,11 +134,11 @@ async fn desktop_token(sp_dc: &str) -> Res<(String, u64)> {
     let secs = now_ms() / 1000;
     let resolve = CLIENT.post(DEVICE_RESOLVE_URL).query(&[("flow_ctx", format!("{flow}:{secs}"))])
         .header("User-Agent", DESKTOP_UA).header("x-csrf-token", csrf).header("referer", &verify_url).header("origin", "https://accounts.spotify.com").header("Cookie", jar.header())
-        .json(&serde_json::json!({ "userCode": user_code })).send().await.map_err(err)?;
+        .json(&serde_json::json!({ "code": user_code })).send().await.map_err(err)?;
     let rstatus = resolve.status();
     let rtext = resolve.text().await.map_err(err)?;
     let result = serde_json::from_str::<Value>(&rtext).ok().and_then(|v| v.get("result").and_then(|r| r.as_str()).map(str::to_string));
-    if result.as_deref() != Some("ok") { return Err(format!("Spotify: o pareamento não foi aceito (HTTP {rstatus}, resultado {:?})", result)); }
+    if result.as_deref() != Some("ok") { return Err(format!("Spotify: o pareamento não foi aceito (HTTP {rstatus}, resultado {:?}, resposta: {})", result, rtext.chars().take(200).collect::<String>())); }
 
     // 4) troca o código do dispositivo pelo token
     for attempt in 0..4 {
@@ -373,6 +373,11 @@ mod tests {
         let html = r#"<html><script id="__NEXT_DATA__" type="application/json" crossorigin="anonymous">{"props":{"initialToken":"TOKEN123"},"query":{"flow_ctx":"abc:1"}}</script></html>"#;
         let json: Value = serde_json::from_str(&NEXT_DATA.captures(html).unwrap()[1]).unwrap();
         assert_eq!(json.pointer("/props/initialToken").and_then(|t| t.as_str()), Some("TOKEN123"));
+    }
+    #[test]
+    fn corpo_do_pareamento_usa_o_campo_code() {
+        // o MetroFuse envia {"code": "<user_code>"}; "userCode" dá HTTP 400
+        assert_eq!(serde_json::json!({ "code": "BX9JMN" }).to_string(), r#"{"code":"BX9JMN"}"#);
     }
     #[test]
     fn cookies_do_fluxo_sao_acumulados() {
