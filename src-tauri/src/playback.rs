@@ -77,7 +77,7 @@ impl Player {
         entry.touch();
         let (t, o) = (track.clone(), order.clone());
         let refresh: Refresh = Arc::new(move || { let (t, o) = (t.clone(), o.clone()); Box::pin(async move { providers::invalidate(&t.provider, &t.id); providers::resolve(&t, &o).await }) });
-        let (source, codec, bitrate) = (stream.source.clone(), stream.codec.clone(), stream.bitrate);
+        let (source, codec, bitrate, loudness) = (stream.source.clone(), stream.codec.clone(), stream.bitrate, stream.loudness_lufs);
         self.cache.fetch(&entry, stream, FULL, Some(refresh));
         entry.wait_ready(START_BYTES, START_TIMEOUT).await?;
         if self.token.load(Ordering::SeqCst) != token { return Ok(()); }
@@ -86,7 +86,7 @@ impl Player {
         let (e2, c2) = (entry.clone(), cancel.clone());
         // A busca reabre o arquivo em cache, então o motor recebe um abridor e não um leitor.
         let open: Box<dyn Fn() -> std::io::Result<crate::cache::Reader> + Send> = Box::new(move || e2.reader(c2.clone()));
-        let meta = LoadMeta { token, key: track.key(), source, codec, bitrate, duration_hint: track.duration_ms.map(|d| d as f64 / 1000.0) };
+        let meta = LoadMeta { token, key: track.key(), source, codec, bitrate, duration_hint: track.duration_ms.map(|d| d as f64 / 1000.0), loudness };
         let ext = entry.ext.clone();
         *self.current.lock() = Some(Current { track, entry, cancel: cancel.clone() });
         self.engine()?.load(open, ext, start, autoplay, cancel, meta);
@@ -107,6 +107,18 @@ impl Player {
     }
     pub fn position(&self) -> f64 { self.engine.as_ref().map_or(0.0, |e| e.position()) }
     pub fn current_track(&self) -> Option<TrackInfo> { self.current.lock().as_ref().map(|c| c.track.clone()) }
+
+    /// Equalizador gráfico de 10 bandas (31 Hz a 16 kHz). `gains` em dB por banda; `preamp` em dB.
+    pub fn set_eq(&self, on: bool, gains: &[f32], preamp: f32) -> Res<()> { self.engine()?.set_eq(on, gains, preamp); Ok(()) }
+
+    /// Normalização de volume (EBU R128 / ITU-R BS.1770). `target` em LUFS (ex.: -14).
+    pub fn set_normalization(&self, on: bool, target: f32) -> Res<()> { self.engine()?.set_normalization(on, target); Ok(()) }
+
+    /// Duração do crossfade em segundos (0 = emenda sem pausa / gapless).
+    pub fn set_crossfade(&self, secs: f32) -> Res<()> { self.engine()?.set_crossfade(secs); Ok(()) }
+
+    /// Passa já para a faixa pré-carregada (botão "próxima"), com fade curto.
+    pub fn advance(&self) -> Res<()> { self.engine()?.advance(); Ok(()) }
 
     /// Define as próximas faixas da fila (em ordem) a pré-carregar. `count` limita quantas; 0 desliga.
     pub fn precache(self: &Arc<Self>, next: Vec<TrackInfo>, count: usize, order: Vec<String>) {

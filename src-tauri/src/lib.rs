@@ -216,7 +216,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             toggle_mini, show_main_window, set_close_to_tray, update_now_playing, dev_flag,
             commands::search_online, commands::audio_play, commands::audio_pause, commands::audio_resume, commands::audio_seek,
-            commands::audio_stop, commands::audio_set_volume, commands::audio_set_speed, commands::audio_precache,
+            commands::audio_stop, commands::audio_set_volume, commands::audio_set_speed, commands::audio_set_eq,
+            commands::audio_set_normalization, commands::audio_set_crossfade, commands::audio_advance,
+            commands::audio_precache,
             commands::cache_stats, commands::cache_clear, commands::cache_configure,
             commands::yt_home, commands::yt_page, commands::yt_radio, commands::lyrics_get, commands::yt_login_start, commands::yt_login_cancel, commands::yt_login_cookie, commands::yt_account, commands::yt_logout, commands::yt_library, commands::yt_rate, commands::yt_mark_played, commands::yt_explore, commands::other_home, commands::sp_status, commands::sp_login_start, commands::sp_login_cancel, commands::sp_account, commands::sp_logout, commands::sp_library, commands::sp_page, commands::sp_rate, commands::sc_login_start, commands::sc_login_cancel, commands::sc_login_token, commands::sc_account, commands::sc_logout, commands::sc_library, commands::sc_playlist, commands::sc_rate, commands::lastfm_status, commands::lastfm_login, commands::lastfm_logout, commands::lastfm_now_playing, commands::lastfm_scrobble, commands::lastfm_love,
         ])

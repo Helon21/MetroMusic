@@ -26,6 +26,11 @@ pub fn audio_play(player: P, track: TrackInfo, start: Option<f64>, autoplay: Opt
 #[tauri::command] pub fn audio_set_volume(player: P, volume: f32) -> Res<()> { player.set_volume(volume) }
 #[tauri::command] pub fn audio_set_speed(player: P, speed: f32) -> Res<()> { player.set_speed(speed) }
 
+#[tauri::command] pub fn audio_set_eq(player: P, on: bool, gains: Vec<f32>, preamp: f32) -> Res<()> { player.set_eq(on, &gains, preamp) }
+#[tauri::command] pub fn audio_set_normalization(player: P, on: bool, target: f32) -> Res<()> { player.set_normalization(on, target) }
+#[tauri::command] pub fn audio_set_crossfade(player: P, secs: f32) -> Res<()> { player.set_crossfade(secs) }
+#[tauri::command] pub fn audio_advance(player: P) -> Res<()> { player.advance() }
+
 #[tauri::command]
 pub fn audio_precache(player: P, tracks: Vec<TrackInfo>, count: usize, order: Vec<String>) {
     player.inner().precache(tracks, count, order);
