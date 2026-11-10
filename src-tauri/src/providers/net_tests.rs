@@ -817,3 +817,26 @@ async fn net_download_real_com_tags_e_letra() {
     assert_eq!(s.source, "local");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A assinatura dos pacotes da release confere com a chave pública embutida no app (é o que o atualizador exige).
+#[tokio::test]
+#[ignore]
+async fn net_assinatura_da_release() {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let conf: serde_json::Value = serde_json::from_str(include_str!("../../tauri.conf.json")).unwrap();
+    let pubkey_txt = String::from_utf8(b64.decode(conf["plugins"]["updater"]["pubkey"].as_str().unwrap()).unwrap()).unwrap();
+    let pk = minisign_verify::PublicKey::decode(&pubkey_txt).expect("chave pública");
+    let latest: serde_json::Value = crate::http::CLIENT.get("https://github.com/caduHD4/MetroMusic/releases/latest/download/latest.json").send().await.unwrap().json().await.unwrap();
+    println!("RELEASE versão {} · plataformas {:?}", latest["version"], latest["platforms"].as_object().unwrap().keys().collect::<Vec<_>>());
+    // o instalador do Windows é o menor: serve para provar a cadeia inteira sem baixar 85 MB
+    let plat = &latest["platforms"]["windows-x86_64"];
+    let bytes = crate::http::CLIENT.get(plat["url"].as_str().unwrap()).send().await.unwrap().bytes().await.unwrap();
+    let sig_txt = String::from_utf8(b64.decode(plat["signature"].as_str().unwrap()).unwrap()).unwrap();
+    let sig = minisign_verify::Signature::decode(&sig_txt).expect("assinatura");
+    pk.verify(&bytes, &sig, false).expect("a assinatura deveria conferir com a chave do app");
+    println!("RELEASE assinatura OK ({} bytes)", bytes.len());
+    // e um arquivo adulterado é recusado
+    let mut ruim = bytes.to_vec(); ruim[100] ^= 0xFF;
+    assert!(pk.verify(&ruim, &sig, false).is_err(), "arquivo alterado não pode passar");
+}

@@ -2703,6 +2703,7 @@ dependencies = [
  "keepawake",
  "lofty",
  "md-5",
+ "minisign-verify",
  "notify",
  "once_cell",
  "open",

@@ -51,8 +51,17 @@ Legenda: ✅ funciona e foi validado · 🟡 funciona com limite · 🔜 "Em bre
 | 6 | **Importar M3U e CSV** e **importar por link** (playlist/álbum do YouTube Music ou Spotify): lê os arquivos, procura cada música nos provedores com o critério da reprodução e mostra o que não achou (fica de fora, sem palpite). M3U com caminhos locais usa os arquivos | `scripts/tests/importers.test.mjs` (3) + `cargo test importer::` (2) + **`net_importacao_acha_as_musicas`** + Playwright (fluxo M3U) |
 | 6 | **Transferência de tempo**: passa a contagem e o histórico de uma música para outra | Playwright (contagem e histórico) |
 | 7 | **Biblioteca local** (`folders`, `scanLocal`, `minDuration`, `watchFolders`, `scanOnStart`, `readEmbeddedLyrics`, `preferEmbeddedArt`): seletor de pastas, varredura recursiva com tags (lofty), capa embutida ou da pasta (`cover.jpg`…), letra do `.lrc` ao lado ou da tag, vigia de mudanças, índice em disco (aparece na hora ao abrir), toca os arquivos pelo motor. Conta o que foi pulado (Opus/AIFF/WMA, curtos, ilegíveis) | `cargo test local::` (9, arquivos WAV gerados com tags e capa; inclui o vigia de pastas com arquivos criados e apagados de verdade) + Playwright (varredura e faixas registradas) |
+| 8 | **Ouvir junto** (`ltServer`, `ltCustomServer`, `ltUsername`, `ltAutoJoin`, `ltAutoSuggest`, `ltSyncVolume`): cliente real do servidor do MetroFuse/Metrolist (protobuf sobre WebSocket, com gzip). Criar/entrar na sala, aprovar ou recusar pedidos, anfitrião transmite faixa/play/pause/seek/fila/volume, convidados seguem e carregam antes do play, sugestões, transferir anfitrião, remover, bloquear e reconexão com o token da sessão. Só faixas do YouTube Music entram na sala (o servidor compartilha ids do YouTube) | `scripts/tests/lt-protocol.test.mjs` (6) + **`pnpm test:net`** contra o servidor real (13 passos, dois clientes) + Playwright com um cliente de verdade do outro lado, nos dois sentidos (convidado e anfitrião) |
+| 8 | **Spotify**: letra (provedor `spotify`, `color-lyrics`), busca (`searchDesktop`), Canvas (`canvaz`, protobuf) e o vídeo sobre a capa (`animatedCovers`, `spotifyCanvas`) e no fundo (`expCoverFade`). Faixas de outros serviços são casadas com a do Spotify pelo critério da reprodução | `cargo test spotify::` (letra, protobuf do Canvas e busca em formatos de resposta) + Playwright (vídeo na capa e no fundo, e desligado). **A resposta real do Spotify ainda não foi conferida com a sua sessão** |
+| 9 | **Experimentos visuais**: "Letras MetroMusic" (desligado = letra clássica), "Linha de letra suave" (3 linhas, brilho que cresce), galáxia adaptativa e espelhada (cores e brilho lidos da capa), dissolver a capa animada no fundo | `scripts/tests/coverTone.test.mjs` (4) + Playwright (opacidade 0,6 → 0,77 conforme a capa; camadas espelhada e de cor ligam e desligam) |
+| 9 | **Bitrate ao vivo** (`liveBitrate`): o motor mede o que lê do arquivo e o rótulo de FLAC/MP3/Vorbis acompanha | `cargo test audio::` (janela de 1 s) + `scripts/tests/liveBitrate.test.mjs` (4). Corrigido junto: o Discord mostrava "129000 kbps" (bits/s) nos detalhes de reprodução |
+| 10 | **Atualização automática** (plugin oficial do Tauri, pacotes assinados, GitHub Releases, `main` = canal estável): aviso com o changelog da release, "Atualizar" baixa, troca os arquivos e reinicia, sem assistente de instalação; pular versão; verificar manualmente | `scripts/tests/releaseNotes.test.mjs` (4) + Playwright (aviso e progresso). **`net_assinatura_da_release`**: a release v0.1.0 publicada traz `latest.json` com notas e assinaturas que conferem com a chave do app (e um arquivo adulterado é recusado); o AppImage da release abre no Linux. O passo final (instalar a 0.1.0 e atualizar para uma 0.1.1) só dá para conferir quando a próxima versão for publicada |
+| — | **Boas-vindas no primeiro uso**: mostra como conectar YouTube Music, Spotify e Discord; some depois de fechada ou se já houver conta conectada | Playwright (aparece, "Entrar" abre o login e fechar volta para ela, "Pular" não reaparece) |
+| — | **Compartilhar**: link real de cada serviço (nada de domínio inventado), link universal (song.link), copiar, WhatsApp, Telegram, e-mail, código QR e sala do Ouvir junto; arquivo local e playlist sua explicam que não há link (a playlist vira lista de texto) | `scripts/tests/shareLinks.test.mjs` (5) + `cargo test links::` + Playwright |
+| — | **Capa grande do Tocando agora** busca a miniatura de até 1280×720 do YouTube (cai para 640×480 e 480×360 quando o vídeo não tem a maior; o placeholder cinza de 120×90 é rejeitado). As capas pequenas ficam como antes | `scripts/tests/art.test.mjs` (6) + Playwright com um vídeo que tem e outro que não tem a versão grande |
+| — | **Cursor de mãozinha** em tudo o que é clicável (botões ativos, links, controles, sliders); texto e botões desativados mantêm a seta | Playwright (37 de 37 botões ativos) |
 
-Suítes: `pnpm test` roda `node --test scripts/tests/*.test.mjs` (33 testes) e `cargo test` (89 testes). Testes de rede ficam em `cargo test net_ -- --ignored`.
+Suítes: `pnpm test` roda `node --test scripts/tests/*.test.mjs` (59 testes) e `cargo test` (89 testes). Testes de rede ficam em `cargo test net_ -- --ignored`.
 
 **Pendente de validação com algo que só você tem:**
 - **Tradução por IA:** falta uma chave de API; a lógica está validada contra servidores falsos, mas não contra um provedor real.
@@ -79,22 +88,17 @@ Suítes: `pnpm test` roda `node --test scripts/tests/*.test.mjs` (33 testes) e `
 - Arquivos **Opus, AIFF e WMA** não tocam (o decodificador não os lê); a varredura os conta e avisa.
 - Downloads de faixas do SoundCloud em HLS gravam o áudio, mas as tags podem não caber no formato fragmentado (o app avisa no log e mantém o arquivo).
 
-**Etapa 8, integrações**
-- **JioSaavn** (`jioQuality`, `jioLanguage`): a busca, o início por idioma e a URL assinada por taxa já funcionam no backend (`providers/jiosaavn.rs`, `net_jiosaavn`), mas a CDN (`web.saavncdn.com`) responde **403** ao baixar o áudio por um cliente que não é o site. Por isso o provedor **não está ligado** à reprodução nem à busca da interface. Resolver isso exigiria imitar o navegador, o que não foi feito.
-- Spotify: `spotifyCanvas`, `canvasPriority`, `canvasDownload`, `spotifyHistory(+Global)`, `spotifyLyrics` seguem em breve: dependem do token do player web com limite de requisições já apertado e da busca por faixa (`spotify::search` ainda devolve vazio). Referências: `utils/spotify/SpotifyCanvasClient.kt`, `SpotifyListeningHistoryManager.kt`, `lyrics/SpotifyLyricsProvider.kt`.
-- Discord: `discordStatus`, `discordPreferSpotify`, `discordCanvas*` (o Rich Presence local não controla o status da conta). Opcional no futuro: modo "conta do Discord" como o do MetroFuse (Social SDK).
-- Ouvir junto (`ltServer`, `ltCustomServer`, `ltUsername`, `ltAutoJoin`, `ltAutoSuggest`, `ltSyncVolume`): o recurso inteiro é simulado (`listentogether/*.kt`, WebSocket).
-- Last.fm e SoundCloud: login e sincronização ainda sem validação com conta real.
-
-**Etapa 9, letras**
-- Provedores de letra que continuam sem backend: Apple Music (Paxsenix), Musixmatch, Deezer, Spotify, QQ Music, BiniLyrics, LyricsPlus. Testados: o BiniLyrics está atrás de um desafio do Cloudflare e os espelhos do LyricsPlus estão fora do ar/desativados; os demais pedem token ou cabeçalhos de app.
-- Kanji em letra japonesa não é convertido (só kana).
-- Experimentos visuais (`expMetroLyrics`, `expSmoothInline`, `expCoverFade`, `expGalaxy*`, `animatedCovers`, `artistMotion`, `liveBitrate`): `ui/component/ExperimentalLyrics.kt`, `apple/AppleMusicCanvasProvider.kt`.
-
-**Etapa 10**
-- **Atualizações**: o repositório de onde vêm as versões não está definido; compile com `METROMUSIC_UPDATE_REPO=dono/nome`. Sem isso a tela diz que o build não tem canal. Só avisa e abre a página: instalar sozinho exigiria pacotes assinados e a chave do atualizador do Tauri.
-- **Idioma do app**: os textos escritos dentro de cada tela (saudação do Início, faixas de atalhos, diálogos, páginas de Biblioteca, Conta, Estatísticas…) ainda estão só em português. Basta passar o texto por `tr("…")` (de `src/i18n`) e acrescentar o par em `en.json`; em desenvolvimento `window.__i18nMiss` lista o que falta na tela aberta.
-- `openLinks`: funciona dentro do app (busca). Registrar o app como o programa padrão de links `https` do sistema não é possível; um esquema próprio (`metromusic://`) exigiria o plugin de deep link.
+**O que ainda está "Em breve"** (aparece desativado, com selo)
+- **Spotify**: `spotifyHistory` e `spotifyHistoryGlobal` (gravariam reproduções na sua conta pelo canal de telemetria do Spotify: foi decisão deixar de fora por mexer no histórico e nas recomendações da conta); `canvasDownload` e `canvasPriority` (dependem da arte animada da Apple).
+- **Apple Music**: `artistMotion` e a arte animada da Apple (precisam de um token extraído do site, frágil).
+- **JioSaavn**: `jioQuality` e `jioLanguage`. A busca e o início funcionam no backend, mas a CDN responde 403 ao baixar o áudio (ver `providers/jiosaavn.rs`), então o provedor não está ligado à reprodução.
+- **Áudio**: `skipSilence`, `skipSilenceInstant`, `automix*`; `downloadQuality` (os downloads usam a mesma qualidade da reprodução).
+- **Discord**: `discordStatus`, `discordPreferSpotify`, `discordCanvas*` (o Rich Presence local não controla o status da conta nem mostra vídeo).
+- **Opus, AIFF e WMA** não tocam (o decodificador não os lê).
+- **Provedores de letra sem backend**: Apple Music, Musixmatch, Deezer, QQ Music, BiniLyrics e LyricsPlus (testados: Cloudflare, espelhos fora do ar, tokens).
+- **Kanji** em letra japonesa não é convertido (só kana).
+- **Idioma do app**: os textos escritos dentro de cada tela (saudação do Início, diálogos, Biblioteca, Conta, Estatísticas…) ainda estão só em português; basta passar cada texto por `tr("…")` e acrescentar o par em `en.json` (em desenvolvimento, `window.__i18nMiss` lista o que falta).
+- **Spotify ao vivo**: letra, busca e Canvas foram escritos e testados com respostas de exemplo; falta conferir a resposta real com a sua sessão.
 
 ## Limites conhecidos do que foi feito
 
