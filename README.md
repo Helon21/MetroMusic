@@ -99,6 +99,15 @@ Baixe a versão mais recente na [página de releases](https://github.com/caduHD4
 
 macOS ainda não tem pacote.
 
+### Aviso do Windows ("Fornecedor desconhecido")
+
+Ao abrir o instalador, o Windows Defender SmartScreen pode mostrar **"O Windows protegeu o computador"** e **"Fornecedor desconhecido"**. Isso acontece porque o instalador ainda **não tem assinatura de código** (um certificado pago, que projetos novos e gratuitos costumam não ter), e não porque algo esteja errado com o arquivo. Para continuar:
+
+1. Clique em **Mais informações**.
+2. Clique em **Executar assim mesmo**.
+
+O código é aberto e cada pacote da release é assinado com a chave do projeto (é essa assinatura que o atualizador confere). Quem preferir pode compilar a partir do código-fonte (veja [Compilar](#compilar)).
+
 ### Dependências no Linux
 
 O AppImage já traz quase tudo. Para o áudio e a bandeja, o sistema precisa de `alsa` (ou PipeWire com `pipewire-alsa`) e do `libayatana-appindicator`.
