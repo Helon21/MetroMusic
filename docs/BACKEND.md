@@ -28,7 +28,7 @@ eventos audio:* (loading, buffering, loaded, playing, paused, position, ended, a
 | `providers/auth.rs` | Sessão do YouTube Music (cookie + `SAPISIDHASH`) | `InnerTube` (cookie) |
 | `providers/soundcloud.rs` | `client_id` raspado do site, busca, paradas, HLS (AAC em MP4 fragmentado) | `SoundCloudAudioProvider` |
 | `providers/sc_account.rs` | Conta do SoundCloud: perfil, curtidas, playlists, histórico, curtir | (novo) |
-| `providers/spotify.rs` | Conta do Spotify: login pela web + token de dispositivo, biblioteca, playlists, curtidas, recentes, busca | `SpotifyCanvasClient` (parte do token e da API Web) |
+| `providers/spotify.rs` | Conta do Spotify: login pela web (`sp_dc`), token do player web (TOTP) e GraphQL interno: biblioteca, playlists, álbuns, artistas, curtidas | `SpotifyCanvasClient` (token web e GraphQL) |
 | `providers/deezer.rs` | API pública: busca, paradas, metadados, trecho de 30 s | `DeezerAudioProvider` (só a parte pública) |
 | `providers/matcher.rs` | Decide se um resultado é a mesma música | `ProviderFallbackMatcher` |
 | `providers/mod.rs` | Escolhe o provedor de cada faixa; correspondência paralela (8 s, cache de 90 s); início das outras fontes | `ProviderMatchSearch` |
@@ -55,10 +55,10 @@ Cada sessão fica num arquivo no diretório de dados do app (permissão `0600`);
 | --- | --- | --- | --- |
 | YouTube Music | janela do Google (cookies lidos do webview) ou cookie colado | `youtube-auth.json` | Início personalizada, curtidas, playlists, álbuns, artistas, histórico (ler) e histórico oficial (escrever, após 30 s ouvidos), curtir |
 | SoundCloud | janela do SoundCloud (`oauth_token`) ou token colado | `soundcloud-auth.txt` | curtidas, playlists, histórico, curtir |
-| Spotify | janela de login da web (cookie `sp_dc`) ou cookie colado | `spotify-auth.json` | curtidas, playlists, álbuns, artistas, recentes, Início, curtir (o histórico do Spotify é só leitura) |
+| Spotify | janela de login da web (cookie `sp_dc`) ou cookie colado | `spotify-auth.json` | curtidas, playlists, álbuns, artistas, Início, curtir |
 | Last.fm | usuário e senha + chave/segredo de API do próprio usuário | `lastfm.json` | scrobble, "Tocando agora", Loved |
 
-**Spotify:** é um método **não oficial**, igual ao do MetroFuse: com o `sp_dc`, roda o *Device Authorization Flow* do app desktop (`/oauth2/device/authorize` → página de pareamento com o cookie → `/pair/api/resolve` com `{"code": user_code}` → `/api/token`). Não há refresh token; o fluxo roda de novo quando o token expira. Pode quebrar quando o Spotify mudar a página de pareamento. Os passos com sessão ainda não foram validados de ponta a ponta.
+**Spotify:** método **não oficial**, como o do MetroFuse. Com o `sp_dc` o app pede um token ao player web (segredo TOTP lido de um gist público + hora do servidor → `open.spotify.com/api/token`) e fala com o **GraphQL interno** (`api-partner.spotify.com/pathfinder/v2/query`), com o hash de cada consulta lido do JS do player web. A API oficial (`api.spotify.com/v1`) **não é usada**: com este tipo de login ela responde sempre 429, pois o limite é do app do Spotify. Consultas usadas: `profileAttributes`, `fetchLibraryTracks`, `libraryV3`, `fetchPlaylist`, `getAlbum`, `queryArtistOverview`, `addToLibrary`/`removeFromLibrary`. Validado com uma conta real (login, curtidas, playlists, álbuns, artistas, Início, curtir e descurtir). **Sem histórico por faixa:** o endpoint antigo (`RecentlyPlayedService/Stream`) responde 404 e o `recents` do player web exige uma lista que só o navegador guarda; a Início mostra "Ouvido recentemente" (o que você abriu por último). Durante um 429 o app não chama o Spotify (o bloqueio fica salvo no arquivo da sessão). Pode quebrar quando o Spotify mudar o site.
 
 **Last.fm:** a chave e o segredo da API vêm de last.fm/api/account/create (ou das variáveis de build `MM_LASTFM_KEY`/`MM_LASTFM_SECRET`).
 
@@ -116,7 +116,7 @@ Build: o `src-tauri/target` passa de 10 GB; limpe com `cargo clean` ao terminar 
 
 ## Limitações conhecidas
 
-- Spotify, Last.fm e SoundCloud: o login e a sincronização dependem de uma conta real e ainda não foram validados de ponta a ponta.
+- Last.fm e SoundCloud: o login e a sincronização dependem de uma conta real e ainda não foram validados de ponta a ponta. O Spotify foi validado, menos o histórico por faixa, que não tem fonte.
 - Sem downloads offline nem biblioteca local (Baixadas, Arquivos locais, Enviadas).
 - Tidal, Qobuz e JioSaavn não têm backend; Deezer não tem login.
 - A biblioteca da conta é lida e as curtidas/histórico são enviados, mas criar ou editar playlists, seguir artistas e salvar álbuns não voltam para as contas.

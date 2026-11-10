@@ -1,40 +1,38 @@
-//! Spotify: login pela web (cookie `sp_dc`) + token do "app desktop" via Device Authorization Flow,
-//! como no MetroFuse (`SpotifyCanvasClient`). Com o token, a API Web oficial entrega biblioteca, playlists,
-//! curtidas, recentes e busca.
+//! Spotify: login pela web (cookie `sp_dc`) e leitura da conta pelo GraphQL interno do player web, como no MetroFuse.
 //!
-//! Fluxo (porte fiel de `createDesktopAccessToken`):
-//!   1. `POST /oauth2/device/authorize` (client id do app desktop) → `device_code`, `user_code`, URL de pareamento;
-//!   2. abre a URL de pareamento **com o cookie `sp_dc`**, seguindo os redirecionamentos: o `flow_ctx` vem da URL final
-//!      e o token CSRF, do `__NEXT_DATA__` da página;
-//!   3. `POST /pair/api/resolve` com o `user_code` (aprova o dispositivo em nome da conta logada);
-//!   4. `POST /api/token` troca o `device_code` pelo access token.
-//! Não há refresh token: quando o token expira, o fluxo roda de novo a partir do `sp_dc`.
+//! Por que não a API oficial (`api.spotify.com/v1`)? Com este tipo de login ela responde sempre 429 ("API rate limit
+//! exceeded"), mesmo na primeira chamada: o limite é do app do Spotify, não da conta. O player web não usa essa API;
+//! ele fala com `api-partner.spotify.com/pathfinder/v2/query` por *persisted queries*, e é isso que fazemos aqui.
+//!
+//! Passos:
+//!   1. token do player web: o segredo TOTP (o mesmo gist que o MetroFuse usa) + hora do servidor → `open.spotify.com/api/token` com o `sp_dc`;
+//!   2. o hash de cada consulta é lido do JS do player web (`open.spotify.com`), pois muda a cada versão do site;
+//!   3. `POST pathfinder/v2/query` com `operationName`, `variables` e o hash.
 //!
 //! O áudio **não** vem do Spotify (DRM): as faixas tocam por correspondência no YouTube Music / SoundCloud.
-//! Aviso: é um método não oficial (depende de páginas e de um client id do app do Spotify) e pode quebrar.
+//! Aviso: é um método não oficial e pode quebrar quando o Spotify mudar o site.
 
 use super::ytmusic::{CollectionRef, Item, Page, Section};
-use crate::http::{err, CLIENT};
+use crate::http::{err, BROWSER_UA, CLIENT};
 use crate::model::{now_ms, Res, TrackInfo};
+use hmac::{Hmac, Mac};
 use once_cell::sync::Lazy;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use sha1::Sha1;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-const API: &str = "https://api.spotify.com/v1";
-
-const DEVICE_AUTH_URL: &str = "https://accounts.spotify.com/oauth2/device/authorize";
-const DEVICE_TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
-const DEVICE_RESOLVE_URL: &str = "https://accounts.spotify.com/pair/api/resolve";
-/// Client id do app desktop do Spotify, o mesmo que o MetroFuse usa.
-const DEVICE_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
-const DEVICE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
-const DEVICE_SCOPE: &str = "app-remote-control,playlist-modify,playlist-modify-private,playlist-modify-public,playlist-read,playlist-read-collaborative,playlist-read-private,streaming,transfer-auth-session,ugc-image-upload,user-follow-modify,user-follow-read,user-library-modify,user-library-read,user-modify,user-modify-playback-state,user-modify-private,user-personalized,user-read-birthdate,user-read-currently-playing,user-read-email,user-read-play-history,user-read-playback-position,user-read-playback-state,user-read-private,user-read-recently-played,user-top-read";
-const DESKTOP_UA: &str = "Spotify/126600447 Win32_x86_64/0 (PC laptop)";
-const WEB_REFERER: &str = "https://open.spotify.com/";
+const WEB: &str = "https://open.spotify.com";
+const GRAPHQL: &str = "https://api-partner.spotify.com/pathfinder/v2/query";
+const NUANCE_GIST: &str = "https://api.github.com/gists/22ed9c6ba463899e933427f7de1f0eef";
+const CACHE_TTL_MS: u64 = 6 * 60 * 60 * 1000;
+const PAGE: usize = 50;
+const MAX_ITEMS: usize = 5000;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct State {
@@ -48,10 +46,12 @@ struct State {
 
 static STATE: Lazy<RwLock<State>> = Lazy::new(|| RwLock::new(State::default()));
 static FILE: Lazy<RwLock<Option<PathBuf>>> = Lazy::new(|| RwLock::new(None));
-/// Até quando o Spotify pediu para não chamar (ms desde a época). Enquanto isso o app não envia nada:
-/// cada chamada feita durante o bloqueio reinicia a janela de limite e atrasa a liberação.
-static BLOCKED_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static NEXT_DATA: Lazy<Regex> = Lazy::new(|| Regex::new(r#"(?s)<script id="__NEXT_DATA__" type="application/json"[^>]*>(.*?)</script>"#).unwrap());
+static BLOCKED_UNTIL: AtomicU64 = AtomicU64::new(0);
+/// (segredo TOTP, versão, quando foi lido)
+static NUANCE: Lazy<Mutex<Option<(String, i64, u64)>>> = Lazy::new(|| Mutex::new(None));
+/// operação → (hash, quando foi lido)
+static HASHES: Lazy<Mutex<HashMap<String, (String, u64)>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static TOKEN_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -62,10 +62,12 @@ pub fn is_logged_in() -> bool { !STATE.read().sp_dc.is_empty() }
 
 pub fn init(path: PathBuf) {
     *FILE.write() = Some(path.clone());
-    if let Ok(b) = std::fs::read(&path) { if let Ok(s) = serde_json::from_slice::<State>(&b) {
-        BLOCKED_UNTIL.store(s.blocked_until_ms, std::sync::atomic::Ordering::Relaxed);
-        *STATE.write() = s;
-    } }
+    if let Ok(b) = std::fs::read(&path) {
+        if let Ok(s) = serde_json::from_slice::<State>(&b) {
+            BLOCKED_UNTIL.store(s.blocked_until_ms, Ordering::Relaxed);
+            *STATE.write() = s;
+        }
+    }
 }
 
 fn save() {
@@ -79,348 +81,500 @@ fn save() {
 }
 
 pub fn logout() {
-    BLOCKED_UNTIL.store(0, std::sync::atomic::Ordering::Relaxed);
+    BLOCKED_UNTIL.store(0, Ordering::Relaxed);
     *STATE.write() = State::default();
     save();
 }
 
-// ───────── Token do app desktop (Device Authorization Flow)
-
-/// Cookies acumulados entre as requisições do fluxo (todos são de `*.spotify.com`).
-struct Jar(Vec<(String, String)>);
-impl Jar {
-    fn header(&self) -> String { self.0.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("; ") }
-    fn absorb(&mut self, resp: &reqwest::Response) {
-        for v in resp.headers().get_all(reqwest::header::SET_COOKIE) {
-            let Ok(raw) = v.to_str() else { continue };
-            if let Some((k, val)) = raw.split(';').next().and_then(|kv| kv.split_once('=')) {
-                self.0.retain(|(n, _)| n != k.trim());
-                self.0.push((k.trim().to_string(), val.trim().to_string()));
-            }
-        }
-    }
-}
-
-/// Segue os redirecionamentos à mão (o `reqwest` descarta o cookie ao trocar de domínio, e aqui ele precisa ir sempre).
-async fn get_following(jar: &mut Jar, start: &str) -> Res<(String, String)> {
-    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(20)).build().map_err(err)?;
-    let mut url = start.to_string();
-    for _ in 0..10 {
-        let resp = client.get(&url).header("User-Agent", DESKTOP_UA).header("Referer", WEB_REFERER).header("Cookie", jar.header()).send().await.map_err(err)?;
-        jar.absorb(&resp);
-        if resp.status().is_redirection() {
-            let loc = resp.headers().get(reqwest::header::LOCATION).and_then(|l| l.to_str().ok()).ok_or("redirecionamento sem destino")?;
-            url = reqwest::Url::parse(&url).map_err(err)?.join(loc).map_err(err)?.to_string();
-            continue;
-        }
-        let html = resp.text().await.map_err(err)?;
-        return Ok((url, html));
-    }
-    Err("redirecionamentos demais na página de pareamento".into())
-}
-
-/// `(access_token, validade em ms)`
-async fn desktop_token(sp_dc: &str) -> Res<(String, u64)> {
-    // 1) autorização do dispositivo
-    let resp = CLIENT.post(DEVICE_AUTH_URL).header("User-Agent", DESKTOP_UA).form(&[("client_id", DEVICE_CLIENT_ID), ("scope", DEVICE_SCOPE)]).send().await.map_err(err)?;
-    let ok = resp.status().is_success();
-    let text = resp.text().await.map_err(err)?;
-    let auth: Value = serde_json::from_str(&text).map_err(|e| format!("Spotify (autorização do dispositivo): resposta inválida ({e}): {}", text.chars().take(200).collect::<String>()))?;
-    if !ok { return Err(format!("Spotify (autorização do dispositivo): {}", auth.get("error_description").or_else(|| auth.get("error")).and_then(|e| e.as_str()).unwrap_or("recusada"))); }
-    let field = |k: &str| auth.get(k).and_then(|x| x.as_str()).map(str::to_string).ok_or_else(|| format!("Spotify: a autorização do dispositivo veio sem `{k}`"));
-    let (device_code, user_code, verify_url) = (field("device_code")?, field("user_code")?, field("verification_uri_complete")?);
-
-    // 2) página de pareamento, já com a sessão
-    let mut jar = Jar(vec![("sp_dc".into(), sp_dc.to_string())]);
-    let (final_url, html) = get_following(&mut jar, &verify_url).await?;
-    let flow = reqwest::Url::parse(&final_url).ok().and_then(|u| u.query_pairs().find(|(k, _)| k == "flow_ctx").map(|(_, v)| v.into_owned()))
-        .map(|f| f.split(':').next().unwrap_or("").to_string()).filter(|f| !f.is_empty())
-        .ok_or("Spotify: a página de pareamento não trouxe o flow_ctx (a sessão sp_dc pode ter expirado: entre de novo)")?;
-    let csrf = NEXT_DATA.captures(&html).and_then(|c| serde_json::from_str::<Value>(&c[1]).ok())
-        .and_then(|v| v.pointer("/props/initialToken").and_then(|t| t.as_str()).map(str::to_string))
-        .ok_or("Spotify: a página de pareamento mudou (sem __NEXT_DATA__/initialToken); o método precisa ser atualizado")?;
-
-    // 3) aprova o dispositivo
-    let secs = now_ms() / 1000;
-    let resolve = CLIENT.post(DEVICE_RESOLVE_URL).query(&[("flow_ctx", format!("{flow}:{secs}"))])
-        .header("User-Agent", DESKTOP_UA).header("x-csrf-token", csrf).header("referer", &verify_url).header("origin", "https://accounts.spotify.com").header("Cookie", jar.header())
-        .json(&serde_json::json!({ "code": user_code })).send().await.map_err(err)?;
-    let rstatus = resolve.status();
-    let rtext = resolve.text().await.map_err(err)?;
-    let result = serde_json::from_str::<Value>(&rtext).ok().and_then(|v| v.get("result").and_then(|r| r.as_str()).map(str::to_string));
-    if result.as_deref() != Some("ok") { return Err(format!("Spotify: o pareamento não foi aceito (HTTP {rstatus}, resultado {:?}, resposta: {})", result, rtext.chars().take(200).collect::<String>())); }
-
-    // 4) troca o código do dispositivo pelo token
-    for attempt in 0..4 {
-        let t = CLIENT.post(DEVICE_TOKEN_URL).header("User-Agent", DESKTOP_UA)
-            .form(&[("client_id", DEVICE_CLIENT_ID), ("device_code", device_code.as_str()), ("grant_type", DEVICE_GRANT_TYPE)]).send().await.map_err(err)?;
-        let tok = t.status().is_success();
-        let body: Value = t.json().await.map_err(err)?;
-        if tok {
-            let at = body.get("access_token").and_then(|x| x.as_str()).ok_or("Spotify: resposta sem access_token")?.to_string();
-            let exp = body.get("expires_in").and_then(|x| x.as_u64()).unwrap_or(3600);
-            return Ok((at, now_ms() + exp * 1000 - 60_000));
-        }
-        let code = body.get("error").and_then(|x| x.as_str()).unwrap_or("");
-        if code == "authorization_pending" && attempt < 3 { tokio::time::sleep(Duration::from_secs(1)).await; continue; }
-        return Err(format!("Spotify (troca do código): {}", body.get("error_description").and_then(|e| e.as_str()).unwrap_or(code)));
-    }
-    Err("Spotify: o dispositivo não foi autorizado a tempo".into())
-}
-
-async fn renew() -> Res<()> {
-    check_blocked()?;
-    let sp_dc = STATE.read().sp_dc.clone();
-    if sp_dc.is_empty() { return Err("entre na sua conta do Spotify primeiro".into()); }
-    let (at, exp) = desktop_token(&sp_dc).await?;
-    { let mut s = STATE.write(); s.access_token = Some(at); s.expires_at_ms = exp; }
-    save();
-    Ok(())
-}
-
-async fn token() -> Res<String> {
-    let expired = { let s = STATE.read(); s.access_token.is_none() || s.expires_at_ms <= now_ms() };
-    if expired { renew().await?; }
-    STATE.read().access_token.clone().ok_or_else(|| "entre na sua conta do Spotify primeiro".to_string())
-}
-
-/// Conclui o login com o cookie `sp_dc` (capturado na janela ou colado): gera o token e confirma a conta.
-pub async fn finish(sp_dc: &str) -> Res<Me> {
-    let sp_dc = sp_dc.trim().trim_start_matches("sp_dc=").trim_end_matches(';').to_string();
-    if sp_dc.len() < 20 { return Err("o cookie sp_dc parece inválido (copie o valor do cookie sp_dc de open.spotify.com)".into()); }
-    *STATE.write() = State { sp_dc, access_token: None, expires_at_ms: 0, blocked_until_ms: 0 };
-    match renew().await {
-        // o token saiu: a sessão é boa, só o /me falhou (ex.: limite de requisições) → não apaga a sessão
-        Ok(()) => match me().await { Ok(m) => { save(); Ok(m) } Err(e) => { if !e.starts_with(RATE_LIMITED) { logout(); } Err(friendly(&e)) } },
-        Err(e) => { logout(); Err(e) }
-    }
-}
-
-// ───────── API
-
-/// Erro se o Spotify ainda está pedindo pausa (não faz nenhuma chamada nesse caso).
-fn check_blocked() -> Res<()> {
-    let until = BLOCKED_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
-    let now = now_ms();
-    if until > now { return Err(format!("{RATE_LIMITED} {}", (until - now + 999) / 1000)); }
-    Ok(())
-}
-
-async fn request(method: reqwest::Method, path: &str, query: &[(&str, String)]) -> Res<Value> {
-    check_blocked()?;
-    let url = if path.starts_with("http") { path.to_string() } else { format!("{API}{path}") };
-    for attempt in 0..3 {
-        let t = token().await?;
-        let mut req = CLIENT.request(method.clone(), &url).query(query).bearer_auth(t);
-        if method != reqwest::Method::GET { req = req.header("Content-Length", "0"); }
-        let resp = req.send().await.map_err(err)?;
-        let status = resp.status();
-        let retry_after = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
-        let text = resp.text().await.map_err(err)?;
-        if status.as_u16() == 401 && attempt == 0 { renew().await?; continue; }
-        if status.as_u16() == 429 {
-            // Pausa curta: espera uma vez. Pausa longa: não fica girando, avisa quanto falta.
-            let wait = retry_after.unwrap_or(2);
-            if wait <= 5 && attempt < 2 { tokio::time::sleep(Duration::from_secs(wait)).await; continue; }
-            let until = now_ms() + (wait + 2) * 1000;
-            BLOCKED_UNTIL.store(until, std::sync::atomic::Ordering::Relaxed);
-            STATE.write().blocked_until_ms = until;
-            save();
-            return Err(format!("{RATE_LIMITED} {wait}"));
-        }
-        // curtir/descurtir respondem 200/204 com corpo vazio: não é erro
-        let v: Value = if text.trim().is_empty() { Value::Null } else { serde_json::from_str(&text).unwrap_or(Value::Null) };
-        if !status.is_success() {
-            return Err(format!("Spotify HTTP {status}: {}", v.pointer("/error/message").and_then(|m| m.as_str()).unwrap_or("erro")));
-        }
-        return Ok(v);
-    }
-    Err("Spotify: não respondeu depois de várias tentativas".into())
-}
+// ───────── Limite de requisições
 
 /// Marca o erro de limite de requisições (o número de segundos vem depois).
 const RATE_LIMITED: &str = "Spotify: limite de requisições atingido, tente de novo em";
 
-/// Mensagem para o usuário: o erro de limite vira "tente de novo em N s".
 pub fn friendly(e: &str) -> String {
     match e.strip_prefix(RATE_LIMITED) {
         Some(rest) => format!("Spotify: limite de requisições atingido; tente de novo em {}s", rest.trim()),
         None => e.to_string(),
     }
 }
-async fn get(path: &str, query: &[(&str, String)]) -> Res<Value> { request(reqwest::Method::GET, path, query).await }
+
+/// Erro se o Spotify ainda está pedindo pausa (sem fazer nenhuma chamada: cada uma reiniciaria a janela de limite).
+fn check_blocked() -> Res<()> {
+    let until = BLOCKED_UNTIL.load(Ordering::Relaxed);
+    let now = now_ms();
+    if until > now { return Err(format!("{RATE_LIMITED} {}", (until - now + 999) / 1000)); }
+    Ok(())
+}
+
+fn block_for(wait_secs: u64) -> String {
+    let until = now_ms() + (wait_secs + 2) * 1000;
+    BLOCKED_UNTIL.store(until, Ordering::Relaxed);
+    STATE.write().blocked_until_ms = until;
+    save();
+    format!("{RATE_LIMITED} {wait_secs}")
+}
+
+// ───────── Token do player web (TOTP)
+
+fn base32_decode(s: &str) -> Res<Vec<u8>> {
+    const AL: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let (mut buf, mut bits, mut out) = (0u32, 0u32, vec![]);
+    for c in s.chars().filter(|c| *c != '=' && !c.is_whitespace()) {
+        let v = AL.find(c.to_ascii_uppercase()).ok_or("segredo TOTP do Spotify inválido (base32)")? as u32;
+        buf = (buf << 5) | v;
+        bits += 5;
+        if bits >= 8 { bits -= 8; out.push(((buf >> bits) & 0xff) as u8); }
+    }
+    Ok(out)
+}
+
+/// TOTP de 6 dígitos (RFC 6238, HMAC-SHA1, passo de 30 s).
+fn totp(secret_b32: &str, unix_secs: u64) -> Res<String> {
+    let key = base32_decode(secret_b32)?;
+    let mut mac = Hmac::<Sha1>::new_from_slice(&key).map_err(|e| e.to_string())?;
+    mac.update(&(unix_secs / 30).to_be_bytes());
+    let h = mac.finalize().into_bytes();
+    let o = (h[h.len() - 1] & 0x0f) as usize;
+    let bin = ((h[o] as u32 & 0x7f) << 24) | ((h[o + 1] as u32) << 16) | ((h[o + 2] as u32) << 8) | h[o + 3] as u32;
+    Ok(format!("{:06}", bin % 1_000_000))
+}
+
+async fn nuance(force: bool) -> Res<(String, i64)> {
+    if !force {
+        if let Some((s, v, at)) = NUANCE.lock().clone() { if now_ms().saturating_sub(at) < CACHE_TTL_MS { return Ok((s, v)); } }
+    }
+    let resp = CLIENT.get(NUANCE_GIST).header("User-Agent", "MetroMusic").header("Accept", "application/vnd.github+json").send().await.map_err(err)?;
+    if !resp.status().is_success() { return Err(format!("Spotify: não consegui ler o segredo do token (HTTP {})", resp.status())); }
+    let v: Value = resp.json().await.map_err(err)?;
+    let content = v.pointer("/files/nuances.json/content").and_then(|c| c.as_str()).ok_or("Spotify: o segredo do token mudou de lugar")?;
+    let list: Vec<Value> = serde_json::from_str(content).map_err(|e| format!("Spotify: segredo do token ilegível ({e})"))?;
+    let best = list.iter().filter_map(|e| Some((e.get("s")?.as_str()?.to_string(), e.get("v")?.as_i64()?))).max_by_key(|(_, v)| *v).ok_or("Spotify: nenhum segredo de token disponível")?;
+    *NUANCE.lock() = Some((best.0.clone(), best.1, now_ms()));
+    Ok(best)
+}
+
+async fn server_time() -> u64 {
+    let r = CLIENT.get(format!("{WEB}/api/server-time")).header("User-Agent", BROWSER_UA).send().await;
+    match r {
+        Ok(r) => r.json::<Value>().await.ok().and_then(|v| v.get("serverTime").and_then(|t| t.as_u64())).unwrap_or(now_ms() / 1000),
+        Err(_) => now_ms() / 1000,
+    }
+}
+
+/// Pede um token ao player web com o `sp_dc`. Devolve (token, validade em ms).
+async fn fetch_web_token(sp_dc: &str) -> Res<(String, u64)> {
+    for attempt in 0..2 {
+        let (secret, ver) = nuance(attempt == 1).await?;
+        let code = totp(&secret, server_time().await)?;
+        let resp = CLIENT.get(format!("{WEB}/api/token"))
+            .query(&[("reason", "transport"), ("productType", "web-player"), ("totp", code.as_str()), ("totpServer", code.as_str()), ("totpVer", &ver.to_string())])
+            .header("User-Agent", BROWSER_UA).header("Accept", "application/json").header("Referer", format!("{WEB}/")).header("Cookie", format!("sp_dc={sp_dc}"))
+            .send().await.map_err(err)?;
+        let status = resp.status();
+        if status.as_u16() == 429 {
+            let wait = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.parse().ok()).unwrap_or(30);
+            return Err(block_for(wait));
+        }
+        let text = resp.text().await.map_err(err)?;
+        let v: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        if let Some(tok) = v.get("accessToken").and_then(|t| t.as_str()) {
+            if v.get("isAnonymous").and_then(|a| a.as_bool()) == Some(true) { return Err("o cookie sp_dc não é válido ou expirou; entre de novo no Spotify".into()); }
+            let exp = v.get("accessTokenExpirationTimestampMs").and_then(|e| e.as_u64()).unwrap_or(now_ms() + 50 * 60 * 1000);
+            return Ok((tok.to_string(), exp.saturating_sub(60_000)));
+        }
+        if attempt == 0 { continue; } // segredo antigo: relê o gist e tenta de novo
+        return Err(format!("Spotify: o token do player web foi recusado (HTTP {status}); o método pode ter mudado"));
+    }
+    unreachable!()
+}
+
+async fn renew() -> Res<()> {
+    check_blocked()?;
+    let sp_dc = STATE.read().sp_dc.clone();
+    if sp_dc.is_empty() { return Err("entre na sua conta do Spotify primeiro".into()); }
+    let (tok, exp) = fetch_web_token(&sp_dc).await?;
+    { let mut s = STATE.write(); s.access_token = Some(tok); s.expires_at_ms = exp; }
+    save();
+    Ok(())
+}
+
+async fn token() -> Res<String> {
+    let _g = TOKEN_LOCK.lock().await; // uma renovação por vez, mesmo com várias consultas em paralelo
+    let expired = { let s = STATE.read(); s.access_token.is_none() || s.expires_at_ms <= now_ms() };
+    if expired { renew().await?; }
+    STATE.read().access_token.clone().ok_or_else(|| "entre na sua conta do Spotify primeiro".to_string())
+}
+
+/// Conclui o login com o cookie `sp_dc` (capturado na janela ou colado): pede o token e confirma a conta.
+pub async fn finish(sp_dc: &str) -> Res<Me> {
+    let sp_dc = sp_dc.trim().trim_start_matches("sp_dc=").trim_end_matches(';').to_string();
+    if sp_dc.len() < 20 { return Err("o cookie sp_dc parece inválido (copie o valor do cookie sp_dc de open.spotify.com)".into()); }
+    BLOCKED_UNTIL.store(0, Ordering::Relaxed);
+    *STATE.write() = State { sp_dc, ..Default::default() };
+    match renew().await {
+        Ok(()) => match me().await {
+            Ok(m) => { save(); Ok(m) }
+            // limite de requisições: a sessão é boa, só a confirmação da conta falhou
+            Err(e) => { if !e.starts_with(RATE_LIMITED) { logout(); } Err(friendly(&e)) }
+        },
+        Err(e) => { logout(); Err(friendly(&e)) }
+    }
+}
+
+// ───────── GraphQL (persisted queries)
+
+/// Lê no JS do player web o hash da consulta `op`.
+async fn find_hash(op: &str, force: bool) -> Res<String> {
+    if !force {
+        if let Some((h, at)) = HASHES.lock().get(op).cloned() { if now_ms().saturating_sub(at) < CACHE_TTL_MS { return Ok(h); } }
+    }
+    let html = CLIENT.get(format!("{WEB}/")).header("User-Agent", BROWSER_UA).send().await.map_err(err)?.text().await.map_err(err)?;
+    static SRC: Lazy<Regex> = Lazy::new(|| Regex::new(r#"<script[^>]+src="([^"]+)""#).unwrap());
+    let bundle = SRC.captures_iter(&html).map(|c| c[1].to_string()).find(|s| s.contains("/web-player/web-player."))
+        .ok_or("Spotify: não achei o código do player web (o site mudou)")?;
+    let url = if bundle.starts_with("//") { format!("https:{bundle}") } else if bundle.starts_with('/') { format!("{WEB}{bundle}") } else { bundle };
+    let js = CLIENT.get(&url).header("User-Agent", BROWSER_UA).send().await.map_err(err)?.text().await.map_err(err)?;
+    let esc = regex::escape(op);
+    let patterns = [
+        format!(r#""{esc}","(?:query|mutation)","([a-f0-9]{{64}})""#),
+        format!(r#"operationName:"{esc}"[\s\S]{{0,1000}}?sha256Hash:"([a-f0-9]{{64}})""#),
+        format!(r#""{esc}"[\s\S]{{0,800}}?sha256Hash\\?":\\?"([a-f0-9]{{64}})"#),
+    ];
+    for p in patterns {
+        if let Some(h) = Regex::new(&p).ok().and_then(|re| re.captures(&js).map(|c| c[1].to_string())) {
+            HASHES.lock().insert(op.to_string(), (h.clone(), now_ms()));
+            return Ok(h);
+        }
+    }
+    Err(format!("Spotify: não achei a consulta {op} no player web (o site mudou)"))
+}
+
+async fn gql_once(op: &str, variables: &Value, hash: &str, tok: &str) -> Res<(u16, Value, Option<u64>)> {
+    let sp_dc = STATE.read().sp_dc.clone();
+    let body = json!({ "operationName": op, "variables": variables, "extensions": { "persistedQuery": { "version": 1, "sha256Hash": hash } } });
+    let resp = CLIENT.post(GRAPHQL).bearer_auth(tok).json(&body)
+        .header("User-Agent", BROWSER_UA).header("Accept", "application/json").header("App-Platform", "WebPlayer").header("Accept-Language", "en")
+        .header("Referer", format!("{WEB}/")).header("Origin", WEB).header("Cookie", format!("sp_dc={sp_dc}"))
+        .send().await.map_err(err)?;
+    let st = resp.status().as_u16();
+    let retry = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
+    let text = resp.text().await.map_err(err)?;
+    Ok((st, serde_json::from_str(&text).unwrap_or(Value::Null), retry))
+}
+
+/// Executa uma consulta. Renova o token em 401 e o hash quando o Spotify diz que não o conhece.
+async fn gql(op: &str, variables: Value) -> Res<Value> {
+    check_blocked()?;
+    let mut hash = find_hash(op, false).await?;
+    let mut refreshed_hash = false;
+    let mut renewed = false;
+    for _ in 0..4 {
+        let tok = token().await?;
+        let (st, v, retry) = gql_once(op, &variables, &hash, &tok).await?;
+        if st == 429 { return Err(block_for(retry.unwrap_or(30))); }
+        if st == 401 && !renewed { renewed = true; STATE.write().access_token = None; continue; }
+        let errs = v.get("errors").map(|e| e.to_string()).unwrap_or_default();
+        if (st == 400 || st == 404 || errs.contains("PersistedQueryNotFound")) && !refreshed_hash {
+            refreshed_hash = true;
+            let fresh = find_hash(op, true).await?;
+            if fresh != hash { hash = fresh; continue; }
+        }
+        if !(200..300).contains(&st) { return Err(format!("Spotify HTTP {st} em {op}")); }
+        if v.get("data").map_or(true, |d| d.is_null()) && !errs.is_empty() { return Err(format!("Spotify ({op}): {}", errs.chars().take(160).collect::<String>())); }
+        return Ok(v);
+    }
+    Err("Spotify: a consulta não respondeu depois de renovar o token".into())
+}
+
+// ───────── Conversões
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Me { pub id: String, pub name: String, pub handle: Option<String>, pub avatar: Option<String> }
 
 pub async fn me() -> Res<Me> {
-    let v = get("/me", &[]).await?;
-    let s = |k: &str| v.get(k).and_then(|x| x.as_str()).filter(|x| !x.is_empty()).map(str::to_string);
-    let id = s("id").ok_or("a sessão não é válida (o Spotify não reconheceu a conta); entre de novo")?;
-    Ok(Me { name: s("display_name").unwrap_or_else(|| id.clone()), id, handle: None, avatar: v.pointer("/images/0/url").and_then(|u| u.as_str()).map(str::to_string) })
+    let v = gql("profileAttributes", json!({})).await?;
+    let p = v.pointer("/data/me/profile").ok_or("a sessão não é válida (o Spotify não reconheceu a conta); entre de novo")?;
+    let id = p.get("username").or_else(|| p.get("accountId")).and_then(|x| x.as_str()).unwrap_or("spotify").to_string();
+    Ok(Me { name: s(p, "name").unwrap_or_else(|| id.clone()), id, handle: None, avatar: p.pointer("/avatar/sources/0/url").and_then(|u| u.as_str()).map(str::to_string) })
 }
 
 fn s(v: &Value, k: &str) -> Option<String> { v.get(k).and_then(|x| x.as_str()).filter(|x| !x.is_empty()).map(str::to_string) }
+fn id_of(uri: &str, kind: &str) -> Option<String> { uri.strip_prefix(&format!("spotify:{kind}:")).filter(|i| !i.is_empty()).map(str::to_string) }
+fn image(v: &Value, path: &str) -> Option<String> { v.pointer(path).and_then(|u| u.as_str()).map(str::to_string) }
 
-fn to_track(t: &Value, album_fallback: Option<&Value>) -> Option<TrackInfo> {
-    if t.get("type").and_then(|x| x.as_str()).map_or(false, |k| k != "track") { return None; }
-    let id = s(t, "id")?;
-    let album = t.get("album").filter(|a| a.is_object()).or(album_fallback);
-    let artists: Vec<String> = t.get("artists").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| s(x, "name")).collect()).unwrap_or_default();
+/// `uri`: o `_uri` do envelope (nas curtidas o dado da faixa não traz o próprio uri).
+fn to_track(data: &Value, uri: Option<&str>, album_fallback: Option<&Value>) -> Option<TrackInfo> {
+    let uri = uri.map(str::to_string).or_else(|| s(data, "uri"))?;
+    let id = id_of(&uri, "track")?; // episódios e arquivos locais não entram
+    let album = data.get("albumOfTrack").filter(|a| a.is_object()).or(album_fallback);
+    let artists: Vec<String> = data.pointer("/artists/items").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| x.pointer("/profile/name").and_then(|n| n.as_str()).map(str::to_string)).collect()).unwrap_or_default();
+    let dur = data.pointer("/trackDuration/totalMilliseconds").or_else(|| data.pointer("/duration/totalMilliseconds")).and_then(|d| d.as_u64());
     Some(TrackInfo {
-        provider: "spotify".into(), id: id.clone(), title: s(t, "name")?, artists: if artists.is_empty() { vec!["Artista desconhecido".into()] } else { artists },
-        album: album.and_then(|a| s(a, "name")),
-        duration_ms: t.get("duration_ms").and_then(|d| d.as_u64()),
-        isrc: t.pointer("/external_ids/isrc").and_then(|i| i.as_str()).map(str::to_string),
-        artwork_url: album.and_then(|a| a.pointer("/images/0/url")).and_then(|u| u.as_str()).map(str::to_string),
-        explicit: t.get("explicit").and_then(|e| e.as_bool()).unwrap_or(false),
-        url: t.pointer("/external_urls/spotify").and_then(|u| u.as_str()).map(str::to_string),
-        album_id: album.and_then(|a| s(a, "id")).map(|i| format!("sp:album:{i}")),
-        artist_id: t.pointer("/artists/0/id").and_then(|i| i.as_str()).map(|i| format!("sp:artist:{i}")),
+        provider: "spotify".into(), url: Some(format!("https://open.spotify.com/track/{id}")), id, title: s(data, "name")?,
+        artists: if artists.is_empty() { vec!["Artista desconhecido".into()] } else { artists },
+        album: album.and_then(|a| s(a, "name")), duration_ms: dur,
+        artwork_url: album.and_then(|a| image(a, "/coverArt/sources/0/url")),
+        explicit: data.pointer("/contentRating/label").and_then(|l| l.as_str()) == Some("EXPLICIT"),
+        album_id: album.and_then(|a| s(a, "uri")).and_then(|u| id_of(&u, "album")).map(|i| format!("sp:album:{i}")),
+        artist_id: data.pointer("/artists/items/0/uri").and_then(|u| u.as_str()).and_then(|u| id_of(u, "artist")).map(|i| format!("sp:artist:{i}")),
         ..Default::default()
     })
 }
 
-fn collection(kind: &str, v: &Value, subtitle: String) -> Option<Item> {
-    let id = s(v, "id")?;
-    Some(Item { track: None, collection: Some(CollectionRef { kind: kind.into(), id: format!("sp:{kind}:{id}"), title: s(v, "name")?, subtitle, artwork: v.pointer("/images/0/url").and_then(|u| u.as_str()).map(str::to_string) }) })
+fn coll(kind: &str, id: String, title: String, subtitle: String, artwork: Option<String>) -> Item {
+    Item { track: None, collection: Some(CollectionRef { kind: kind.into(), id: format!("sp:{kind}:{id}"), title, subtitle, artwork }) }
 }
 
-async fn paged(path: &str, query: &[(&str, String)], max: usize) -> Res<Vec<Value>> {
-    let mut out = vec![];
-    let mut v = get(path, query).await?;
-    for _ in 0..max {
-        if let Some(items) = v.get("items").and_then(|i| i.as_array()) { out.extend(items.iter().cloned()); }
-        match v.get("next").and_then(|n| n.as_str()).map(str::to_string) { Some(n) => v = get(&n, &[]).await?, None => break }
+/// Item de `libraryV3` → cartão (playlist, álbum ou artista).
+fn library_item(it: &Value) -> Option<Item> {
+    let node = it.get("item")?;
+    let d = node.get("data")?;
+    let uri = s(node, "_uri").or_else(|| s(d, "uri"))?;
+    match d.get("__typename").and_then(|t| t.as_str()).unwrap_or("") {
+        "PseudoPlaylist" => Some(coll("playlist", "collection-tracks".into(), s(d, "name")?, format!("{} faixas", d.get("count").and_then(|c| c.as_u64()).unwrap_or(0)), image(d, "/image/sources/0/url"))),
+        "Playlist" => Some(coll("playlist", id_of(&uri, "playlist")?, s(d, "name")?, s(&d["ownerV2"]["data"], "name").unwrap_or_default(), image(d, "/images/items/0/sources/0/url"))),
+        "Album" => Some(coll("album", id_of(&uri, "album")?, s(d, "name")?, format!("Álbum · {}", d.pointer("/artists/items/0/profile/name").and_then(|n| n.as_str()).unwrap_or("")), image(d, "/coverArt/sources/0/url"))),
+        "Artist" => Some(coll("artist", id_of(&uri, "artist")?, d.pointer("/profile/name").and_then(|n| n.as_str())?.to_string(), "Artista".into(), image(d, "/visuals/avatarImage/sources/0/url"))),
+        _ => None,
     }
+}
+
+// ───────── Biblioteca e páginas
+
+async fn liked_tracks(max: usize) -> Res<(Vec<TrackInfo>, u64)> {
+    let (mut out, mut offset, mut total) = (vec![], 0usize, 0u64);
+    loop {
+        let v = gql("fetchLibraryTracks", json!({ "uri": "spotify:collection:tracks", "offset": offset, "limit": PAGE })).await?;
+        let page = v.pointer("/data/me/library/tracks").ok_or("Spotify: resposta das curtidas inesperada")?;
+        total = page.get("totalCount").and_then(|t| t.as_u64()).unwrap_or(total);
+        let items = page.get("items").and_then(|i| i.as_array()).cloned().unwrap_or_default();
+        out.extend(items.iter().filter_map(|i| to_track(i.pointer("/track/data")?, i.pointer("/track/_uri").and_then(|u| u.as_str()), None)));
+        offset += items.len();
+        if items.is_empty() || offset as u64 >= total || out.len() >= max { break; }
+    }
+    Ok((out, total))
+}
+
+async fn library_v3(filter: &str, max: usize) -> Res<Vec<Item>> { library_v3_ordered(Some(filter), None, max).await }
+
+/// `filter`: "Playlists", "Albums", "Artists" ou nenhum (tudo); `order`: `None` ou "Recents" (o que você abriu por último).
+async fn library_v3_ordered(filter: Option<&str>, order: Option<&str>, max: usize) -> Res<Vec<Item>> {
+    let (mut out, mut offset) = (vec![], 0usize);
+    loop {
+        let filters: Vec<&str> = filter.into_iter().collect();
+        let vars = json!({ "filters": filters, "order": order, "textFilter": "", "features": ["LIKED_SONGS"], "limit": PAGE, "offset": offset, "flatten": false, "expandedFolders": [], "folderUri": null, "includeFoldersWhenFlattening": true, "withCuration": false });
+        let v = gql("libraryV3", vars).await?;
+        let lib = v.pointer("/data/me/libraryV3").ok_or("Spotify: resposta da biblioteca inesperada")?;
+        let items = lib.get("items").and_then(|i| i.as_array()).cloned().unwrap_or_default();
+        out.extend(items.iter().filter_map(library_item));
+        offset += items.len();
+        let total = lib.get("totalCount").and_then(|t| t.as_u64()).unwrap_or(0);
+        if items.is_empty() || offset as u64 >= total || out.len() >= max { break; }
+    }
+    out.truncate(max);
     Ok(out)
 }
 
-pub async fn search(query: &str, limit: usize) -> Res<Vec<TrackInfo>> {
-    if query.trim().is_empty() || !is_logged_in() { return Ok(vec![]); }
-    let v = get("/search", &[("q", query.into()), ("type", "track".into()), ("limit", limit.clamp(1, 50).to_string())]).await?;
-    Ok(v.pointer("/tracks/items").and_then(|i| i.as_array()).map(|a| a.iter().filter_map(|t| to_track(t, None)).collect()).unwrap_or_default())
-}
-
+/// Biblioteca: "songs", "playlists", "albums" ou "artists". O histórico recente do Spotify ainda não está disponível.
 pub async fn library(kind: &str) -> Res<Page> {
     let mut page = Page { kind: kind.into(), id: kind.into(), ..Default::default() };
     match kind {
-        "songs" => page.tracks = paged("/me/tracks", &[("limit", "50".into())], 60).await?.iter().filter_map(|i| i.get("track")).filter_map(|t| to_track(t, None)).collect(),
-        "history" => {
-            let v = get("/me/player/recently-played", &[("limit", "50".into())]).await?;
-            let mut seen_run: Option<String> = None;
-            for i in v.get("items").and_then(|i| i.as_array()).into_iter().flatten() {
-                if let Some(t) = i.get("track").and_then(|t| to_track(t, None)) {
-                    if seen_run.as_deref() == Some(&t.id) { continue; }
-                    seen_run = Some(t.id.clone());
-                    page.tracks.push(t);
-                }
-            }
-        }
-        "playlists" => page.items = paged("/me/playlists", &[("limit", "50".into())], 20).await?.iter().filter_map(|p| {
-            let by = p.pointer("/owner/display_name").and_then(|o| o.as_str()).unwrap_or("");
-            let n = p.pointer("/tracks/total").and_then(|n| n.as_u64()).unwrap_or(0);
-            collection("playlist", p, format!("{by} · {n} faixas"))
-        }).collect(),
-        "albums" => page.items = paged("/me/albums", &[("limit", "50".into())], 20).await?.iter().filter_map(|a| a.get("album")).filter_map(|a| {
-            let by = a.pointer("/artists/0/name").and_then(|o| o.as_str()).unwrap_or("");
-            collection("album", a, format!("Álbum · {by}"))
-        }).collect(),
-        "artists" => {
-            let mut after: Option<String> = None;
-            for _ in 0..10 {
-                let mut q = vec![("type", "artist".to_string()), ("limit", "50".into())];
-                if let Some(a) = &after { q.push(("after", a.clone())); }
-                let v = get("/me/following", &q).await?;
-                let items = v.pointer("/artists/items").and_then(|i| i.as_array()).cloned().unwrap_or_default();
-                page.items.extend(items.iter().filter_map(|a| collection("artist", a, "Artista".into())));
-                after = v.pointer("/artists/cursors/after").and_then(|a| a.as_str()).map(str::to_string);
-                if after.is_none() || items.is_empty() { break; }
-            }
-        }
+        "songs" => page.tracks = liked_tracks(MAX_ITEMS).await?.0,
+        "playlists" => page.items = library_v3("Playlists", MAX_ITEMS).await?,
+        "albums" => page.items = library_v3("Albums", MAX_ITEMS).await?,
+        "artists" => page.items = library_v3("Artists", MAX_ITEMS).await?,
+        "history" => return Err("O histórico recente do Spotify ainda não está disponível".into()),
         _ => return Err(format!("biblioteca do Spotify desconhecida: {kind}")),
     }
     Ok(page)
 }
 
+/// Página de uma coleção: `sp:playlist:<id>`, `sp:album:<id>`, `sp:artist:<id>` ou `sp:playlist:collection-tracks` (curtidas).
 pub async fn page(id: &str) -> Res<Page> {
     let mut parts = id.splitn(3, ':');
     let (_, kind, raw) = (parts.next(), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
-    match kind {
-        "playlist" => {
-            let v = get(&format!("/playlists/{raw}"), &[("fields", "name,description,owner(display_name),images".into())]).await?;
-            let rows = paged(&format!("/playlists/{raw}/tracks"), &[("limit", "100".into()), ("fields", "items(track(id,name,type,duration_ms,explicit,external_ids,external_urls,artists(id,name),album(id,name,images))),next".into())], 50).await?;
-            Ok(Page { kind: "playlist".into(), id: id.into(), title: s(&v, "name").unwrap_or_default(), subtitle: v.pointer("/owner/display_name").and_then(|o| o.as_str()).unwrap_or("").into(),
-                description: s(&v, "description"), artwork: v.pointer("/images/0/url").and_then(|u| u.as_str()).map(str::to_string),
-                tracks: rows.iter().filter_map(|i| i.get("track")).filter_map(|t| to_track(t, None)).collect(), ..Default::default() })
+    match (kind, raw) {
+        ("playlist", "collection-tracks") => {
+            let (tracks, _) = liked_tracks(MAX_ITEMS).await?;
+            Ok(Page { kind: "playlist".into(), id: id.into(), title: "Músicas curtidas".into(), subtitle: "Spotify".into(), tracks, ..Default::default() })
         }
-        "album" => {
-            let v = get(&format!("/albums/{raw}"), &[]).await?;
-            let tracks = paged(&format!("/albums/{raw}/tracks"), &[("limit", "50".into())], 10).await?.iter().filter_map(|t| to_track(t, Some(&v))).collect();
-            let by = v.pointer("/artists/0/name").and_then(|o| o.as_str()).unwrap_or("");
-            Ok(Page { kind: "album".into(), id: id.into(), title: s(&v, "name").unwrap_or_default(), subtitle: format!("Álbum · {by} · {}", s(&v, "release_date").unwrap_or_default().chars().take(4).collect::<String>()),
-                artwork: v.pointer("/images/0/url").and_then(|u| u.as_str()).map(str::to_string), tracks, ..Default::default() })
+        ("playlist", _) => {
+            let uri = format!("spotify:playlist:{raw}");
+            let (mut tracks, mut offset) = (vec![], 0usize);
+            let (mut title, mut desc, mut art, mut owner) = (String::new(), None, None, String::new());
+            loop {
+                let v = gql("fetchPlaylist", json!({ "uri": uri, "offset": offset, "limit": 100, "enableWatchFeedEntrypoint": true })).await?;
+                let pl = v.pointer("/data/playlistV2").ok_or("Spotify: playlist indisponível (pode ser privada ou ter sido removida)")?;
+                if offset == 0 {
+                    title = s(pl, "name").unwrap_or_default(); desc = s(pl, "description");
+                    art = image(pl, "/images/items/0/sources/0/url"); owner = s(&pl["ownerV2"]["data"], "name").unwrap_or_default();
+                }
+                let items = pl.pointer("/content/items").and_then(|i| i.as_array()).cloned().unwrap_or_default();
+                tracks.extend(items.iter().filter_map(|i| to_track(i.pointer("/itemV2/data")?, None, None)));
+                offset += items.len();
+                let total = pl.pointer("/content/totalCount").and_then(|t| t.as_u64()).unwrap_or(0);
+                if items.is_empty() || offset as u64 >= total || tracks.len() >= MAX_ITEMS { break; }
+            }
+            Ok(Page { kind: "playlist".into(), id: id.into(), title, subtitle: owner, description: desc, artwork: art, tracks, ..Default::default() })
         }
-        "artist" => {
-            let v = get(&format!("/artists/{raw}"), &[]).await?;
-            let albums = paged(&format!("/artists/{raw}/albums"), &[("limit", "50".into()), ("include_groups", "album,single".into())], 6).await.unwrap_or_default();
-            let top = get(&format!("/artists/{raw}/top-tracks"), &[("market", "from_token".into())]).await.ok()
-                .and_then(|t| t.get("tracks").and_then(|t| t.as_array()).cloned()).unwrap_or_default();
-            Ok(Page { kind: "artist".into(), id: id.into(), title: s(&v, "name").unwrap_or_default(), subtitle: "Artista".into(),
-                artwork: v.pointer("/images/0/url").and_then(|u| u.as_str()).map(str::to_string),
-                tracks: top.iter().filter_map(|t| to_track(t, None)).collect(),
-                items: albums.iter().filter_map(|a| collection("album", a, format!("{} · {}", s(a, "album_type").unwrap_or_default(), s(a, "release_date").unwrap_or_default().chars().take(4).collect::<String>()))).collect(), ..Default::default() })
+        ("album", _) => {
+            let uri = format!("spotify:album:{raw}");
+            let (mut tracks, mut offset) = (vec![], 0usize);
+            let (mut title, mut sub, mut art, mut meta) = (String::new(), String::new(), None, Value::Null);
+            loop {
+                let v = gql("getAlbum", json!({ "uri": uri, "locale": "", "offset": offset, "limit": PAGE })).await?;
+                let al = v.pointer("/data/albumUnion").ok_or("Spotify: álbum indisponível")?;
+                if offset == 0 {
+                    title = s(al, "name").unwrap_or_default();
+                    let by = al.pointer("/artists/items/0/profile/name").and_then(|n| n.as_str()).unwrap_or("");
+                    let year = al.pointer("/date/isoString").and_then(|d| d.as_str()).map(|d| d.chars().take(4).collect::<String>()).unwrap_or_default();
+                    sub = format!("Álbum · {by} · {year}");
+                    art = image(al, "/coverArt/sources/0/url");
+                    meta = json!({ "name": title, "uri": uri, "coverArt": al.get("coverArt").cloned().unwrap_or(Value::Null) });
+                }
+                let items = al.pointer("/tracksV2/items").and_then(|i| i.as_array()).cloned().unwrap_or_default();
+                tracks.extend(items.iter().filter_map(|i| to_track(i.get("track")?, None, Some(&meta))));
+                offset += items.len();
+                let total = al.pointer("/tracksV2/totalCount").and_then(|t| t.as_u64()).unwrap_or(0);
+                if items.is_empty() || offset as u64 >= total { break; }
+            }
+            Ok(Page { kind: "album".into(), id: id.into(), title, subtitle: sub, artwork: art, tracks, ..Default::default() })
+        }
+        ("artist", _) => {
+            let v = gql("queryArtistOverview", json!({ "uri": format!("spotify:artist:{raw}"), "locale": "", "includePrerelease": true })).await?;
+            let a = v.pointer("/data/artistUnion").ok_or("Spotify: artista indisponível")?;
+            let d = a.get("discography").cloned().unwrap_or(Value::Null);
+            let mut releases: Vec<&Value> = d.pointer("/popularReleasesAlbums/items").and_then(|i| i.as_array()).map(|a| a.iter().collect()).unwrap_or_default();
+            for group in ["albums", "singles", "compilations"] {
+                for g in d.pointer(&format!("/{group}/items")).and_then(|i| i.as_array()).into_iter().flatten() {
+                    releases.extend(g.pointer("/releases/items").and_then(|i| i.as_array()).into_iter().flatten());
+                }
+            }
+            let mut seen = std::collections::HashSet::new();
+            let items = releases.iter().filter_map(|r| {
+                let rid = id_of(&s(r, "uri")?, "album")?;
+                if !seen.insert(rid.clone()) { return None; }
+                let year = r.pointer("/date/year").and_then(|y| y.as_u64()).map(|y| y.to_string()).unwrap_or_default();
+                Some(coll("album", rid, s(r, "name")?, format!("{} · {year}", s(r, "type").unwrap_or_default().to_lowercase()), image(r, "/coverArt/sources/0/url")))
+            }).collect();
+            let top: Vec<TrackInfo> = a.pointer("/discography/topTracks/items").and_then(|i| i.as_array()).into_iter().flatten()
+                .filter_map(|i| to_track(i.get("track")?, None, None)).collect();
+            Ok(Page { kind: "artist".into(), id: id.into(), title: a.pointer("/profile/name").and_then(|n| n.as_str()).unwrap_or("Artista").into(), subtitle: "Artista".into(),
+                artwork: image(a, "/visuals/avatarImage/sources/0/url"), tracks: top, items, ..Default::default() })
         }
         _ => Err(format!("coleção do Spotify desconhecida: {id}")),
     }
 }
 
-/// Início do Spotify: recentes, top tracks, playlists e álbuns salvos.
+/// Início do Spotify: curtidas recentes, playlists, álbuns salvos e artistas seguidos.
 pub async fn home() -> Res<Vec<Section>> {
-    let top_query = [("limit", "20".to_string()), ("time_range", "short_term".to_string())];
-    let (recent, top, pls, albums) = tokio::join!(library("history"), get("/me/top/tracks", &top_query), library("playlists"), library("albums"));
+    let (liked, pls, albums, artists, recent) = tokio::join!(liked_tracks(30), library_v3("Playlists", 40), library_v3("Albums", 40), library_v3("Artists", 40), library_v3_ordered(None, Some("Recents"), 12));
     let mut out = vec![];
-    let list = |title: &str, tracks: Vec<TrackInfo>| (!tracks.is_empty()).then(|| Section { title: title.into(), label: Some("Spotify".into()), layout: "list".into(), items: tracks.into_iter().map(|t| Item { track: Some(t), collection: None }).collect(), more: None });
     let shelf = |title: &str, items: Vec<Item>| (!items.is_empty()).then(|| Section { title: title.into(), label: Some("Spotify".into()), layout: "carousel".into(), items, more: None });
-    out.extend(list("Tocadas recentemente", recent.map(|p| p.tracks).unwrap_or_default()));
-    out.extend(list("Suas mais ouvidas do mês", top.ok().and_then(|t| t.get("items").and_then(|i| i.as_array()).cloned()).unwrap_or_default().iter().filter_map(|t| to_track(t, None)).collect()));
-    out.extend(shelf("Suas playlists", pls.map(|p| p.items).unwrap_or_default()));
-    out.extend(shelf("Álbuns salvos", albums.map(|p| p.items).unwrap_or_default()));
+    // O Spotify não entrega mais o histórico por faixa; o que existe é o que você abriu por último.
+    out.extend(shelf("Ouvido recentemente", recent.unwrap_or_default()));
+    if let Ok((tracks, _)) = liked {
+        if !tracks.is_empty() { out.push(Section { title: "Curtidas recentes".into(), label: Some("Spotify".into()), layout: "list".into(), items: tracks.into_iter().map(|t| Item { track: Some(t), collection: None }).collect(), more: None }); }
+    }
+    out.extend(shelf("Suas playlists", pls.unwrap_or_default()));
+    out.extend(shelf("Álbuns salvos", albums.unwrap_or_default()));
+    out.extend(shelf("Artistas que você segue", artists.unwrap_or_default()));
     if out.is_empty() { return Err("o Spotify não devolveu nada para a sua Início".into()); }
     Ok(out)
 }
 
+/// A busca do Spotify não é usada: o app procura a mesma música no YouTube Music e no SoundCloud.
+pub async fn search(_query: &str, _limit: usize) -> Res<Vec<TrackInfo>> { Ok(vec![]) }
+
 pub async fn rate(track_id: &str, like: bool) -> Res<()> {
-    request(if like { reqwest::Method::PUT } else { reqwest::Method::DELETE }, "/me/tracks", &[("ids", track_id.into())]).await.map(|_| ())
+    let v = gql(if like { "addToLibrary" } else { "removeFromLibrary" }, json!({ "libraryItemUris": [format!("spotify:track:{track_id}")] })).await?;
+    match v.get("errors").and_then(|e| e.as_array()).filter(|e| !e.is_empty()) {
+        Some(e) => Err(format!("Spotify recusou a alteração: {}", e[0].to_string().chars().take(120).collect::<String>())),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn faixa_sem_id_e_ignorada() {
-        let v = serde_json::json!({ "type": "track", "id": null, "name": "Local" });
-        assert!(to_track(&v, None).is_none());
-        let ok = serde_json::json!({ "type": "track", "id": "abc", "name": "Música", "artists": [{ "id": "z", "name": "Fulano" }], "duration_ms": 1000, "album": { "id": "al", "name": "Disco", "images": [{ "url": "u" }] } });
-        let t = to_track(&ok, None).unwrap();
-        assert_eq!((t.album_id.as_deref(), t.artist_id.as_deref(), t.album.as_deref()), (Some("sp:album:al"), Some("sp:artist:z"), Some("Disco")));
+    fn totp_bate_com_o_vetor_da_rfc_6238() {
+        // segredo "12345678901234567890" em base32; em T=59 s o código de 6 dígitos é 287082
+        assert_eq!(totp("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 59).unwrap(), "287082");
+        assert_eq!(totp("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", 1111111109).unwrap(), "081804");
     }
+
     #[test]
-    fn csrf_vem_do_next_data() {
-        let html = r#"<html><script id="__NEXT_DATA__" type="application/json" crossorigin="anonymous">{"props":{"initialToken":"TOKEN123"},"query":{"flow_ctx":"abc:1"}}</script></html>"#;
-        let json: Value = serde_json::from_str(&NEXT_DATA.captures(html).unwrap()[1]).unwrap();
-        assert_eq!(json.pointer("/props/initialToken").and_then(|t| t.as_str()), Some("TOKEN123"));
+    fn faixa_das_curtidas_usa_o_uri_do_envelope() {
+        let data = json!({ "name": "Música", "artists": { "items": [{ "profile": { "name": "Fulano" }, "uri": "spotify:artist:AR1" }] },
+            "albumOfTrack": { "name": "Disco", "uri": "spotify:album:AL1", "coverArt": { "sources": [{ "url": "u" }] } }, "duration": { "totalMilliseconds": 1000 }, "contentRating": { "label": "EXPLICIT" } });
+        let t = to_track(&data, Some("spotify:track:T1"), None).unwrap();
+        assert_eq!((t.id.as_str(), t.album.as_deref(), t.album_id.as_deref(), t.artist_id.as_deref(), t.duration_ms, t.explicit), ("T1", Some("Disco"), Some("sp:album:AL1"), Some("sp:artist:AR1"), Some(1000), true));
+        // episódios e arquivos locais não são faixas
+        assert!(to_track(&data, Some("spotify:episode:E1"), None).is_none());
+        assert!(to_track(&data, Some("spotify:local:x"), None).is_none());
     }
+
     #[test]
-    fn corpo_do_pareamento_usa_o_campo_code() {
-        // o MetroFuse envia {"code": "<user_code>"}; "userCode" dá HTTP 400
-        assert_eq!(serde_json::json!({ "code": "BX9JMN" }).to_string(), r#"{"code":"BX9JMN"}"#);
+    fn itens_da_biblioteca_viram_cartoes() {
+        let pl = json!({ "item": { "_uri": "spotify:playlist:P1", "data": { "__typename": "Playlist", "name": "Minha", "ownerV2": { "data": { "name": "Eu" } }, "images": { "items": [{ "sources": [{ "url": "i" }] }] } } } });
+        let c = library_item(&pl).unwrap().collection.unwrap();
+        assert_eq!((c.kind.as_str(), c.id.as_str(), c.subtitle.as_str(), c.artwork.as_deref()), ("playlist", "sp:playlist:P1", "Eu", Some("i")));
+        let liked = json!({ "item": { "_uri": "spotify:collection:tracks", "data": { "__typename": "PseudoPlaylist", "name": "Liked Songs", "count": 10 } } });
+        assert_eq!(library_item(&liked).unwrap().collection.unwrap().id, "sp:playlist:collection-tracks");
     }
-    #[test]
-    fn cookies_do_fluxo_sao_acumulados() {
-        let mut jar = Jar(vec![("sp_dc".into(), "x".into())]);
-        jar.0.push(("a".into(), "1".into()));
-        assert_eq!(jar.header(), "sp_dc=x; a=1");
+
+    /// Com uma sessão real: `MM_SP_DC=<cookie> cargo test net_spotify_graphql -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn net_spotify_graphql() {
+        let sp_dc = std::env::var("MM_SP_DC").expect("MM_SP_DC");
+        let m = finish(&sp_dc).await.expect("login");
+        println!("SPGQL conta: {} ({})", m.name, m.id);
+        let (liked, total) = liked_tracks(MAX_ITEMS).await.expect("curtidas");
+        println!("SPGQL curtidas: {} de {total}; 1ª: {:?}", liked.len(), liked.first().map(|t| (&t.title, &t.artists, &t.album)));
+        for k in ["playlists", "albums", "artists"] {
+            let p = library(k).await.expect(k);
+            println!("SPGQL {k}: {} itens; 1º: {:?}", p.items.len(), p.items.first().and_then(|i| i.collection.as_ref()).map(|c| (&c.title, &c.id)));
+        }
+        let pls = library("playlists").await.unwrap();
+        if let Some(c) = pls.items.iter().filter_map(|i| i.collection.as_ref()).find(|c| c.id != "sp:playlist:collection-tracks") {
+            let p = page(&c.id).await.expect("playlist");
+            println!("SPGQL playlist {:?}: {} faixas, dono {:?}", p.title, p.tracks.len(), p.subtitle);
+        }
+        if let Some(c) = library("albums").await.unwrap().items.iter().filter_map(|i| i.collection.as_ref()).next() {
+            let p = page(&c.id).await.expect("álbum");
+            println!("SPGQL álbum {:?}: {} faixas", p.title, p.tracks.len());
+        }
+        if let Some(c) = library("artists").await.unwrap().items.iter().filter_map(|i| i.collection.as_ref()).next() {
+            let p = page(&c.id).await.expect("artista");
+            println!("SPGQL artista {:?}: {} álbuns, {} faixas populares", p.title, p.items.len(), p.tracks.len());
+        }
+        let h = home().await.expect("início");
+        println!("SPGQL início: {}", h.iter().map(|s| format!("{} ({})", s.title, s.items.len())).collect::<Vec<_>>().join("; "));
+    }
+
+    /// Curte uma faixa que NÃO está curtida, confere, e descurte em seguida (deixa a conta como estava):
+    /// `MM_SP_DC=<cookie> cargo test net_spotify_curtir -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn net_spotify_curtir() {
+        let sp_dc = std::env::var("MM_SP_DC").expect("MM_SP_DC");
+        finish(&sp_dc).await.expect("login");
+        let (liked, total0) = liked_tracks(MAX_ITEMS).await.unwrap();
+        let ids: std::collections::HashSet<String> = liked.iter().map(|t| t.id.clone()).collect();
+        let pls = library("playlists").await.unwrap();
+        let cid = pls.items.iter().filter_map(|i| i.collection.as_ref()).find(|c| c.id != "sp:playlist:collection-tracks").unwrap().id.clone();
+        let cand = page(&cid).await.unwrap().tracks.into_iter().find(|t| !ids.contains(&t.id)).expect("faixa não curtida");
+        println!("SPLIKE curtidas antes: {total0}; teste com {:?} ({})", cand.title, cand.id);
+        rate(&cand.id, true).await.expect("curtir");
+        let (_, total1) = liked_tracks(MAX_ITEMS).await.unwrap();
+        println!("SPLIKE depois de curtir: {total1}");
+        rate(&cand.id, false).await.expect("descurtir");
+        let (_, total2) = liked_tracks(MAX_ITEMS).await.unwrap();
+        println!("SPLIKE depois de descurtir: {total2}");
+        assert_eq!((total1, total2), (total0 + 1, total0));
     }
 }

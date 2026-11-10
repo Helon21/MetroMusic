@@ -263,7 +263,7 @@ export function AccountPage() {
   const [tab, setTab] = useState(isTauri ? "songs" : "playlists");
   const yt = accounts.youtube; const sc = accounts.soundcloud; const info = useYt((s) => s.info); const real = isTauri;
   const [scTab, setScTab] = useState<"songs" | "playlists" | "history">("songs");
-  const [spTab, setSpTab] = useState<"songs" | "playlists" | "albums" | "artists" | "history">("songs");
+  const [spTab, setSpTab] = useState<"songs" | "playlists" | "albums" | "artists">("songs");
   return (
     <div className="px-8 pt-5 pb-10">
       <div className="flex items-center gap-5 p-6 rounded-3xl bg-s1 mb-8 relative overflow-hidden">
@@ -305,7 +305,7 @@ export function AccountPage() {
       </div>)}
       {real && accounts.spotify && (<div className={yt || sc ? "mt-12" : ""}>
         <SectionTitle sub="Conteúdo salvo no Spotify">No Spotify</SectionTitle>
-        <div className="flex gap-2 mb-5">{([["songs", "Curtidas"], ["playlists", "Playlists"], ["albums", "Álbuns"], ["artists", "Artistas"], ["history", "Recentes"]] as const).map(([v, l]) => <Chip key={v} active={spTab === v} onClick={() => setSpTab(v)}>{l}</Chip>)}</div>
+        <div className="flex gap-2 mb-5">{([["songs", "Curtidas"], ["playlists", "Playlists"], ["albums", "Álbuns"], ["artists", "Artistas"]] as const).map(([v, l]) => <Chip key={v} active={spTab === v} onClick={() => setSpTab(v)}>{l}</Chip>)}</div>
         <YtLibraryView provider="spotify" kind={spTab} />
       </div>)}
     </div>
