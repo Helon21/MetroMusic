@@ -299,14 +299,30 @@ pub async fn sp_login_start(app: AppHandle) -> Res<()> {
     let win = WebviewWindowBuilder::new(&app, SP_LABEL, WebviewUrl::External("https://accounts.spotify.com/en/login?continue=https%3A%2F%2Fopen.spotify.com%2F".parse().map_err(|e| format!("{e}"))?))
         .title("Entrar no Spotify").inner_size(520.0, 760.0).center().incognito(true).user_agent(LOGIN_UA)
         .build().map_err(|e| format!("não foi possível abrir a janela de login: {e}"))?;
-    let site: tauri::Url = "https://open.spotify.com/".parse().unwrap();
+    // sp_dc pode estar em vários domínios; checamos todos
+    let sites = [
+        "https://open.spotify.com/",
+        "https://accounts.spotify.com/",
+        "https://www.spotify.com/",
+        "https://spotify.com/",
+    ].map(|s| s.parse::<tauri::Url>().unwrap());
     tauri::async_runtime::spawn(async move {
         let emit = |ev: SpLoginEvent| { let _ = app.emit("sp:login", ev); };
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
             if app.get_webview_window(SP_LABEL).is_none() { return emit(SpLoginEvent { ok: false, cancelled: true, error: None, account: None }); }
-            let Ok(cookies) = win.cookies_for_url(site.clone()) else { continue };
-            let Some(sp_dc) = cookies.iter().find(|c| c.name() == "sp_dc").map(|c| c.value().to_string()) else { continue };
+            let mut sp_dc: Option<String> = None;
+            for site in &sites {
+                if let Ok(cookies) = win.cookies_for_url(site.clone()) {
+                    if let Some(c) = cookies.iter().find(|c| c.name() == "sp_dc") {
+                        sp_dc = Some(c.value().to_string());
+                        break;
+                    }
+                }
+            }
+            let Some(sp_dc) = sp_dc else { continue };
+            #[cfg(debug_assertions)]
+            if std::env::var("MM_LOGIN_DEBUG").is_ok() { eprintln!("[spotify login] sp_dc capturado, fechando janela..."); }
             let _ = win.close();
             return emit(match providers::spotify::finish(&sp_dc).await {
                 Ok(m) => SpLoginEvent { ok: true, cancelled: false, error: None, account: Some(m) },
