@@ -59,10 +59,11 @@ export async function initSpotify() {
     if (e.ok && e.account) { onLoggedIn(e.account); refreshSpStatus(); }
     else useSp.setState({ status: "idle", error: e.cancelled ? null : (e.error ?? "Não foi possível entrar") });
   });
-  try {
-    const info = await engine.spAccount();
-    if (info) { setInfo(info); if (getSetting("ytSync") !== false) importSpLikes().catch(() => {}); } else if (useSp.getState().info) setInfo(null);
-  } catch { /* sem rede: mantém o guardado */ }
+  // Ao abrir, não falamos com o Spotify: o perfil guardado basta, e a importação das curtidas já foi feita no login.
+  // (Fazer isso a cada abertura gastava o limite de requisições do Spotify.)
+  if (!useSp.getState().info) {
+    try { const info = await engine.spAccount(); if (info) setInfo(info); } catch { /* sem sessão ou sem rede */ }
+  }
   if (!useSp.getState().info && useLib.getState().accounts.spotify) useLib.getState().setAccount("spotify", null);
 
   // curtir aqui = curtir lá
