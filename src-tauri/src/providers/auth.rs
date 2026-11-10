@@ -1,5 +1,9 @@
 //! Sessão do YouTube Music (cookies do navegador). Com ela a Início, a biblioteca e as curtidas
 //! passam a ser as da conta. O cookie fica só neste computador, em arquivo com permissão restrita.
+//!
+//! Captura o **Cookie completo** do `music.youtube.com` (todos: SID, HSID, SSID, APISID, SAPISID,
+//! __Secure-3PSID, __Secure-3PAPISID, LOGIN_INFO, etc.) + `VISITOR_DATA` + `DATASYNC_ID` (para
+//! contas de marca). Igual ao MetroFuse.
 
 use crate::model::{now_ms, Res};
 use once_cell::sync::Lazy;
@@ -13,9 +17,13 @@ const ORIGIN: &str = "https://music.youtube.com";
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Auth {
+    /// Cabeçalho Cookie completo do music.youtube.com (todos os cookies necessários).
     pub cookie: String,
+    /// SAPISID extraído (ou __Secure-3PAPISID).
     pub sapisid: String,
-    #[serde(default)]
+    /// VISITOR_DATA do yt.config_ (necessário para InnerTube).
+    pub visitor_data: Option<String>,
+    /// DATASYNC_ID (antes do "||") para contas de marca / delegação.
     pub data_sync_id: Option<String>,
 }
 
@@ -32,10 +40,16 @@ pub fn sapisid_of(cookie: &str) -> Option<String> {
     cookie_value(cookie, "SAPISID").or_else(|| cookie_value(cookie, "__Secure-3PAPISID"))
 }
 
-pub fn from_cookie(cookie: &str) -> Res<Auth> {
+/// Cria Auth a partir do cookie completo + visitor_data + data_sync_id.
+pub fn from_parts(cookie: String, visitor_data: Option<String>, data_sync_id: Option<String>) -> Res<Auth> {
     let cookie = cookie.trim().trim_start_matches("Cookie:").trim().to_string();
-    let sapisid = sapisid_of(&cookie).ok_or("o cookie não tem SAPISID: copie o cabeçalho Cookie completo de music.youtube.com depois de entrar")?;
-    Ok(Auth { cookie, sapisid, data_sync_id: None })
+    let sapisid = sapisid_of(&cookie).ok_or("o cookie não tem SAPISID nem __Secure-3PAPISID: faça login no music.youtube.com e capture o cabeçalho Cookie completo")?;
+    Ok(Auth { cookie, sapisid, visitor_data, data_sync_id })
+}
+
+/// Mantém compatibilidade: cria Auth só do cookie (extrai sapisid; visitor_data/data_sync_id ficam None).
+pub fn from_cookie(cookie: &str) -> Res<Auth> {
+    from_parts(cookie.to_string(), None, None)
 }
 
 /// `Authorization: SAPISIDHASH <ts>_<sha1("ts sapisid origin")>`
@@ -50,7 +64,15 @@ pub fn is_logged_in() -> bool { AUTH.read().is_some() }
 /// Cabeçalhos que autenticam a requisição, se houver sessão.
 pub fn headers() -> Vec<(&'static str, String)> {
     match AUTH.read().as_ref() {
-        Some(a) => vec![("Cookie", a.cookie.clone()), ("Authorization", sapisid_hash(&a.sapisid, now_ms() / 1000)), ("X-Goog-AuthUser", "0".into())],
+        Some(a) => {
+            let mut h = vec![
+                ("Cookie", a.cookie.clone()),
+                ("Authorization", sapisid_hash(&a.sapisid, now_ms() / 1000)),
+                ("X-Goog-AuthUser", "0".into()),
+            ];
+            if let Some(vd) = &a.visitor_data { h.push(("X-Goog-Visitor-Id", vd.clone())); }
+            h
+        }
         None => vec![],
     }
 }
@@ -97,5 +119,16 @@ mod tests {
         let h = sapisid_hash("abc", 1_700_000_000);
         assert!(h.starts_with("SAPISIDHASH 1700000000_"));
         assert_eq!(h.len(), "SAPISIDHASH 1700000000_".len() + 40);
+    }
+    #[test]
+    fn from_parts_com_visitor_data() {
+        let cookie = "SAPISID=xyz; SID=abc; HSID=def".to_string();
+        let auth = from_parts(cookie, Some("visitor123".into()), Some("sync456".into())).unwrap();
+        assert_eq!(auth.visitor_data.as_deref(), Some("visitor123"));
+        assert_eq!(auth.data_sync_id.as_deref(), Some("sync456"));
+        set(auth).unwrap();
+        let h = headers();
+        assert!(h.iter().any(|(k, v)| k == &"X-Goog-Visitor-Id" && v == "visitor123"));
+        clear();
     }
 }

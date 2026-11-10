@@ -1,31 +1,35 @@
-//! Spotify pela API Web oficial, com login OAuth (PKCE) do próprio usuário: biblioteca, playlists, curtidas,
-//! histórico recente e busca. O áudio **não** vem do Spotify (é protegido por DRM): as faixas tocam por
-//! correspondência no YouTube Music / SoundCloud, como no Deezer.
+//! Spotify via WebView login (cookie `sp_dc`) + Device Authorization Flow.
 //!
-//! O MetroFuse usa os cookies do player web (`sp_dc`) e endpoints internos; aqui a escolha é o fluxo oficial,
-//! que não depende de segredos embutidos no site. Cada pessoa cria um app em developer.spotify.com e informa o
-//! Client ID uma vez (o fluxo PKCE não usa segredo).
+//! O usuário entra no player web (`open.spotify.com`) num WebView anônimo; capturamos o cookie
+//! `sp_dc` e usamos o **Device Authorization Flow** do Spotify com o **Client ID oficial do app
+//! desktop do Spotify** (hardcoded no MetroFuse) para obter access tokens. Não precisa criar app
+//! no developer.spotify.com.
+//!
+//! O áudio **não** vem do Spotify (DRM): as faixas tocam por correspondência no YouTube Music /
+//! SoundCloud / Deezer, igual ao Deezer.
 
 use super::ytmusic::{CollectionRef, Item, Page, Section};
 use crate::http::{err, CLIENT};
 use crate::model::{now_ms, Res, TrackInfo};
-use base64::Engine as _;
 use once_cell::sync::Lazy;
 use parking_lot::RwLock;
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::path::PathBuf;
+use std::time::Duration;
 
 const API: &str = "https://api.spotify.com/v1";
 const ACCOUNTS: &str = "https://accounts.spotify.com";
-pub const REDIRECT: &str = "http://127.0.0.1:8899/callback";
-const SCOPES: &str = "user-library-read user-library-modify playlist-read-private playlist-read-collaborative user-follow-read user-read-recently-played user-top-read user-read-private";
+
+/// Client ID do app desktop oficial do Spotify (extraído do MetroFuse).
+const DEVICE_CLIENT_ID: &str = "65b708073fc0480ea92a077233ca87bd";
+const DEVICE_AUTH_URL: &str = "https://accounts.spotify.com/oauth2/device/authorize";
+const DEVICE_TOKEN_URL: &str = "https://accounts.spotify.com/oauth2/device/token";
+const DEVICE_SCOPE: &str = "user-read-private user-read-email user-library-read user-library-modify playlist-read-private playlist-read-collaborative user-follow-read user-read-recently-played user-top-read streaming";
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct State {
-    client_id: String,
+    sp_dc: String,
     access_token: Option<String>,
     refresh_token: Option<String>,
     expires_at_ms: u64,
@@ -36,11 +40,15 @@ static FILE: Lazy<RwLock<Option<PathBuf>>> = Lazy::new(|| RwLock::new(None));
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct Status { pub has_client_id: bool, pub logged_in: bool, pub redirect: &'static str }
+pub struct Status {
+    pub has_client_id: bool,
+    pub logged_in: bool,
+    pub redirect: &'static str,
+}
 
 pub fn status() -> Status {
     let s = STATE.read();
-    Status { has_client_id: !s.client_id.is_empty(), logged_in: s.refresh_token.is_some(), redirect: REDIRECT }
+    Status { has_client_id: true, logged_in: s.refresh_token.is_some(), redirect: "https://open.spotify.com" }
 }
 pub fn is_logged_in() -> bool { STATE.read().refresh_token.is_some() }
 
@@ -60,65 +68,115 @@ fn save() {
 }
 
 pub fn logout() {
-    { let mut s = STATE.write(); s.access_token = None; s.refresh_token = None; s.expires_at_ms = 0; }
+    { let mut s = STATE.write(); s.sp_dc.clear(); s.access_token = None; s.refresh_token = None; s.expires_at_ms = 0; }
     save();
 }
 
-// ───────── Login (PKCE)
+// ───────── Login via WebView (frontend chama sp_login_start / sp_login_cancel)
 
-pub struct Pkce { pub verifier: String, pub url: String }
-
-fn b64(bytes: &[u8]) -> String { base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes) }
-
-/// Prepara o login: guarda o Client ID e devolve o verificador e a URL de autorização.
-pub fn begin(client_id: Option<String>) -> Res<Pkce> {
-    if let Some(c) = client_id.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()) { STATE.write().client_id = c; save(); }
-    let cid = STATE.read().client_id.clone();
-    if cid.is_empty() { return Err("informe o Client ID do seu app do Spotify".into()); }
-    let mut raw = vec![0u8; 48];
-    rand::thread_rng().fill(&mut raw[..]);
-    let verifier = b64(&raw);
-    let challenge = b64(&Sha256::digest(verifier.as_bytes()));
-    let url = format!(
-        "{ACCOUNTS}/authorize?client_id={}&response_type=code&redirect_uri={}&scope={}&code_challenge_method=S256&code_challenge={challenge}&show_dialog=true",
-        urlencoding::encode(&cid), urlencoding::encode(REDIRECT), urlencoding::encode(SCOPES)
-    );
-    Ok(Pkce { verifier, url })
+/// Inicia o fluxo: frontend abre WebView em `https://accounts.spotify.com/en/login?continue=https%3A%2F%2Fopen.spotify.com%2F`
+/// e monitora cookies de `open.spotify.com` / `accounts.spotify.com` / `www.spotify.com` / `spotify.com`.
+/// Quando `sp_dc` aparece, frontend chama `sp_login_cookie(sp_dc)`.
+pub async fn begin(_client_id: Option<String>) -> Res<()> {
+    Ok(()) // só avisa o frontend para abrir o WebView
 }
 
-async fn token_request(form: &[(&str, String)]) -> Res<Value> {
-    let resp = CLIENT.post(format!("{ACCOUNTS}/api/token")).form(form).send().await.map_err(err)?;
+pub fn cancel() {}
+
+/// Recebe o cookie `sp_dc` (e opcionalmente outros cookies do domínio) e troca por tokens via Device Flow.
+pub async fn finish(sp_dc: &str) -> Res<crate::providers::spotify::Me> {
+    if sp_dc.trim().is_empty() { return Err("cookie sp_dc vazio".into()); }
+    let sp_dc = sp_dc.trim().to_string();
+
+    // 1) Device Authorization Request
+    let auth = device_authorize().await?;
+    // 2) Poll do token enquanto o usuário autoriza no WebView (frontend já logou)
+    let tokens = poll_device_token(&auth.device_code).await?;
+    store_tokens(&sp_dc, &tokens)?;
+
+    match me().await {
+        Ok(m) => Ok(m),
+        Err(e) => { logout(); Err(e) }
+    }
+}
+
+async fn device_authorize() -> Res<DeviceAuth> {
+    let resp = CLIENT.post(DEVICE_AUTH_URL)
+        .form(&[("client_id", DEVICE_CLIENT_ID), ("scope", DEVICE_SCOPE)])
+        .send().await.map_err(err)?;
     let ok = resp.status().is_success();
     let v: Value = resp.json().await.map_err(err)?;
-    if !ok { return Err(format!("Spotify: {}", v.get("error_description").or_else(|| v.get("error")).and_then(|e| e.as_str()).unwrap_or("login recusado"))); }
-    Ok(v)
+    if !ok { return Err(format!("Spotify device auth: {}", v.get("error_description").or_else(|| v.get("error")).and_then(|e| e.as_str()).unwrap_or("falhou"))); }
+    Ok(DeviceAuth {
+        device_code: v.get("device_code").and_then(|x| x.as_str()).ok_or("sem device_code")?.to_string(),
+        user_code: v.get("user_code").and_then(|x| x.as_str()).ok_or("sem user_code")?.to_string(),
+        verification_uri: v.get("verification_uri").and_then(|x| x.as_str()).ok_or("sem verification_uri")?.to_string(),
+        verification_uri_complete: v.get("verification_uri_complete").and_then(|x| x.as_str()).ok_or("sem verification_uri_complete")?.to_string(),
+        expires_in: v.get("expires_in").and_then(|x| x.as_u64()).unwrap_or(1800),
+        interval: v.get("interval").and_then(|x| x.as_u64()).unwrap_or(5),
+    })
 }
 
-fn store_tokens(v: &Value) -> Res<()> {
-    let at = v.get("access_token").and_then(|t| t.as_str()).ok_or("o Spotify não devolveu o token")?.to_string();
+async fn poll_device_token(device_code: &str) -> Res<TokenResponse> {
+    let start = std::time::Instant::now();
+    let mut interval = 5u64;
+    loop {
+        let resp = CLIENT.post(DEVICE_TOKEN_URL)
+            .form(&[("grant_type", "urn:ietf:params:oauth:grant-type:device_code"), ("device_code", device_code), ("client_id", DEVICE_CLIENT_ID)])
+            .send().await.map_err(err)?;
+        let status = resp.status();
+        let v: Value = resp.json().await.map_err(err)?;
+        if status.is_success() {
+            return Ok(TokenResponse {
+                access_token: v.get("access_token").and_then(|x| x.as_str()).ok_or("sem access_token")?.to_string(),
+                refresh_token: v.get("refresh_token").and_then(|x| x.as_str()).map(str::to_string),
+                expires_in: v.get("expires_in").and_then(|x| x.as_u64()).unwrap_or(3600),
+            });
+        }
+        let err_code = v.get("error").and_then(|x| x.as_str()).unwrap_or("");
+        if err_code == "authorization_pending" || err_code == "slow_down" {
+            if err_code == "slow_down" { interval *= 2; }
+            if start.elapsed() > Duration::from_secs(300) { return Err("tempo esgotado aguardando autorização".into()); }
+            tokio::time::sleep(Duration::from_secs(interval)).await;
+            continue;
+        }
+        return Err(format!("Spotify device token: {}", v.get("error_description").or_else(|| v.get("error")).and_then(|e| e.as_str()).unwrap_or("falhou")));
+    }
+}
+
+#[derive(Debug)]
+struct DeviceAuth { device_code: String, user_code: String, verification_uri: String, verification_uri_complete: String, expires_in: u64, interval: u64 }
+#[derive(Debug)]
+struct TokenResponse { access_token: String, refresh_token: Option<String>, expires_in: u64 }
+
+fn store_tokens(sp_dc: &str, tokens: &TokenResponse) -> Res<()> {
     let mut s = STATE.write();
-    s.access_token = Some(at);
-    if let Some(r) = v.get("refresh_token").and_then(|t| t.as_str()) { s.refresh_token = Some(r.to_string()); }
-    s.expires_at_ms = now_ms() + v.get("expires_in").and_then(|e| e.as_u64()).unwrap_or(3600) * 1000 - 60_000;
+    s.sp_dc = sp_dc.to_string();
+    s.access_token = Some(tokens.access_token.clone());
+    s.refresh_token = tokens.refresh_token.clone();
+    s.expires_at_ms = now_ms() + tokens.expires_in * 1000 - 60_000;
     drop(s);
     save();
     Ok(())
 }
 
-pub async fn finish(code: &str, verifier: &str) -> Res<Me> {
-    let cid = STATE.read().client_id.clone();
-    let v = token_request(&[("grant_type", "authorization_code".into()), ("code", code.into()), ("redirect_uri", REDIRECT.into()), ("client_id", cid), ("code_verifier", verifier.into())]).await?;
-    store_tokens(&v)?;
-    match me().await { Ok(m) => Ok(m), Err(e) => { logout(); Err(e) } }
-}
-
 async fn refresh() -> Res<()> {
-    let (cid, rt) = { let s = STATE.read(); (s.client_id.clone(), s.refresh_token.clone()) };
+    let (sp_dc, rt) = { let s = STATE.read(); (s.sp_dc.clone(), s.refresh_token.clone()) };
     let rt = rt.ok_or("entre na sua conta do Spotify primeiro")?;
-    let v = token_request(&[("grant_type", "refresh_token".into()), ("refresh_token", rt), ("client_id", cid)]).await.inspect_err(|e| {
-        if e.contains("invalid_grant") || e.contains("revoked") { logout(); }
-    })?;
-    store_tokens(&v)
+    let resp = CLIENT.post(format!("{ACCOUNTS}/api/token"))
+        .form(&[("grant_type", "refresh_token"), ("refresh_token", &rt), ("client_id", DEVICE_CLIENT_ID)])
+        .send().await.map_err(err)?;
+    let ok = resp.status().is_success();
+    let v: Value = resp.json().await.map_err(err)?;
+    if !ok {
+        if v.get("error").and_then(|x| x.as_str()) == Some("invalid_grant") { logout(); }
+        return Err(format!("Spotify refresh: {}", v.get("error_description").or_else(|| v.get("error")).and_then(|e| e.as_str()).unwrap_or("falhou")));
+    }
+    store_tokens(&sp_dc, &TokenResponse {
+        access_token: v.get("access_token").and_then(|x| x.as_str()).ok_or("sem access_token")?.to_string(),
+        refresh_token: v.get("refresh_token").and_then(|x| x.as_str()).map(str::to_string),
+        expires_in: v.get("expires_in").and_then(|x| x.as_u64()).unwrap_or(3600),
+    })
 }
 
 async fn token() -> Res<String> {
@@ -127,18 +185,28 @@ async fn token() -> Res<String> {
     STATE.read().access_token.clone().ok_or_else(|| "entre na sua conta do Spotify primeiro".to_string())
 }
 
+async fn get_sp_dc() -> Res<String> {
+    let sp_dc = STATE.read().sp_dc.clone();
+    if sp_dc.is_empty() { return Err("não logado no Spotify (falta sp_dc)".into()); }
+    Ok(sp_dc)
+}
+
 // ───────── API
 
 async fn request(method: reqwest::Method, path: &str, query: &[(&str, String)]) -> Res<Value> {
     let url = if path.starts_with("http") { path.to_string() } else { format!("{API}{path}") };
     for attempt in 0..3 {
         let t = token().await?;
-        let resp = CLIENT.request(method.clone(), &url).query(query).bearer_auth(t).header("Content-Length", "0").send().await.map_err(err)?;
+        let mut req = CLIENT.request(method.clone(), &url).query(query).bearer_auth(t);
+        if method == reqwest::Method::PUT || method == reqwest::Method::POST || method == reqwest::Method::DELETE {
+            req = req.header("Content-Length", "0");
+        }
+        let resp = req.send().await.map_err(err)?;
         let status = resp.status();
         if status.as_u16() == 401 && attempt == 0 { refresh().await?; continue; }
         if status.as_u16() == 429 {
             let wait = resp.headers().get("retry-after").and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok()).unwrap_or(2).min(8);
-            tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+            tokio::time::sleep(Duration::from_secs(wait)).await;
             continue;
         }
         if !status.is_success() {
@@ -164,10 +232,9 @@ pub async fn me() -> Res<Me> {
 
 fn s(v: &Value, k: &str) -> Option<String> { v.get(k).and_then(|x| x.as_str()).filter(|x| !x.is_empty()).map(str::to_string) }
 
-/// `album_fallback`: faixas de um álbum não trazem o objeto do álbum.
 fn to_track(t: &Value, album_fallback: Option<&Value>) -> Option<TrackInfo> {
     if t.get("type").and_then(|x| x.as_str()).map_or(false, |k| k != "track") { return None; }
-    let id = s(t, "id")?; // faixas locais e indisponíveis não têm id
+    let id = s(t, "id")?;
     let album = t.get("album").filter(|a| a.is_object()).or(album_fallback);
     let artists: Vec<String> = t.get("artists").and_then(|a| a.as_array()).map(|a| a.iter().filter_map(|x| s(x, "name")).collect()).unwrap_or_default();
     Some(TrackInfo {
@@ -186,13 +253,9 @@ fn to_track(t: &Value, album_fallback: Option<&Value>) -> Option<TrackInfo> {
 
 fn collection(kind: &str, v: &Value, subtitle: String) -> Option<Item> {
     let id = s(v, "id")?;
-    Some(Item { track: None, collection: Some(CollectionRef {
-        kind: kind.into(), id: format!("sp:{kind}:{id}"), title: s(v, "name")?, subtitle,
-        artwork: v.pointer("/images/0/url").and_then(|u| u.as_str()).map(str::to_string),
-    }) })
+    Some(Item { track: None, collection: Some(CollectionRef { kind: kind.into(), id: format!("sp:{kind}:{id}"), title: s(v, "name")?, subtitle, artwork: v.pointer("/images/0/url").and_then(|u| u.as_str()).map(str::to_string) }) })
 }
 
-/// Percorre uma lista paginada (`items` + `next`) até `max` páginas.
 async fn paged(path: &str, query: &[(&str, String)], max: usize) -> Res<Vec<Value>> {
     let mut out = vec![];
     let mut v = get(path, query).await?;
@@ -209,7 +272,6 @@ pub async fn search(query: &str, limit: usize) -> Res<Vec<TrackInfo>> {
     Ok(v.pointer("/tracks/items").and_then(|i| i.as_array()).map(|a| a.iter().filter_map(|t| to_track(t, None)).collect()).unwrap_or_default())
 }
 
-/// Biblioteca: "songs", "playlists", "albums", "artists" ou "history".
 pub async fn library(kind: &str) -> Res<Page> {
     let mut page = Page { kind: kind.into(), id: kind.into(), ..Default::default() };
     match kind {
@@ -219,7 +281,7 @@ pub async fn library(kind: &str) -> Res<Page> {
             let mut seen_run: Option<String> = None;
             for i in v.get("items").and_then(|i| i.as_array()).into_iter().flatten() {
                 if let Some(t) = i.get("track").and_then(|t| to_track(t, None)) {
-                    if seen_run.as_deref() == Some(&t.id) { continue; } // a mesma faixa em sequência (repetição)
+                    if seen_run.as_deref() == Some(&t.id) { continue; }
                     seen_run = Some(t.id.clone());
                     page.tracks.push(t);
                 }
@@ -251,7 +313,6 @@ pub async fn library(kind: &str) -> Res<Page> {
     Ok(page)
 }
 
-/// Página de uma coleção: `sp:playlist:<id>`, `sp:album:<id>` ou `sp:artist:<id>`.
 pub async fn page(id: &str) -> Res<Page> {
     let mut parts = id.splitn(3, ':');
     let (_, kind, raw) = (parts.next(), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
@@ -284,7 +345,7 @@ pub async fn page(id: &str) -> Res<Page> {
     }
 }
 
-/// Início do Spotify: o que você ouviu há pouco, suas mais ouvidas, playlists e álbuns salvos.
+/// Início do Spotify: recentes, top tracks, playlists e álbuns salvos.
 pub async fn home() -> Res<Vec<Section>> {
     let top_query = [("limit", "20".to_string()), ("time_range", "short_term".to_string())];
     let (recent, top, pls, albums) = tokio::join!(library("history"), get("/me/top/tracks", &top_query), library("playlists"), library("albums"));
@@ -306,12 +367,6 @@ pub async fn rate(track_id: &str, like: bool) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn pkce_challenge_bate_com_o_exemplo_da_rfc() {
-        // RFC 7636, apêndice B
-        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-        assert_eq!(b64(&Sha256::digest(verifier.as_bytes())), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
-    }
     #[test]
     fn faixa_sem_id_e_ignorada() {
         let v = serde_json::json!({ "type": "track", "id": null, "name": "Local" });

@@ -76,8 +76,12 @@ static VISITOR: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 static STREAMS: Lazy<SyncMutex<HashMap<String, StreamInfo>>> = Lazy::new(|| SyncMutex::new(HashMap::new()));
 static VISITOR_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^Cg[ts]").unwrap());
 
-/// `visitorData` identifica a sessão anônima; vem do `sw.js_data` do YouTube Music.
+/// `visitorData` identifica a sessão anônima; prefere o armazenado na auth (vinculado à conta),
+/// caso contrário busca do `sw.js_data` do YouTube Music.
 pub(super) async fn visitor_data() -> Option<String> {
+    if let Some(a) = crate::providers::auth::get() {
+        if let Some(vd) = a.visitor_data { return Some(vd); }
+    }
     let mut guard = VISITOR.lock().await;
     if guard.is_some() { return guard.clone(); }
     let body = CLIENT.get(format!("{ORIGIN_MUSIC}/sw.js_data")).header("User-Agent", BROWSER_UA).send().await.ok()?.text().await.ok()?;
@@ -92,7 +96,9 @@ pub(super) fn context(c: &Client, visitor: &Option<String>) -> Value {
     for (k, v) in [("osName", c.os_name), ("osVersion", c.os_version), ("deviceMake", c.make), ("deviceModel", c.model), ("androidSdkVersion", c.sdk)] {
         if let Some(v) = v { client[k] = json!(v); }
     }
-    json!({ "client": client, "request": { "internalExperimentFlags": [], "useSsl": true }, "user": { "lockedSafetyMode": false } })
+    let mut user = json!({ "lockedSafetyMode": false });
+    if let Some(ds) = crate::providers::auth::on_behalf_of() { user["onBehalfOfUser"] = json!(ds); }
+    json!({ "client": client, "request": { "internalExperimentFlags": [], "useSsl": true }, "user": user })
 }
 
 /// `auth`: assina a requisição com a sessão da conta, se houver uma.
