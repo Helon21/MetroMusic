@@ -8,6 +8,8 @@ import { useLib } from "../store/library";
 import { usePlayer } from "../store/player";
 import { BrandTile, SourceIcon, type BrandId } from "../lib/brands";
 import { cancelLogin, loginCookie, loginWeb, logout, useYt } from "../lib/account";
+import { createAccountPlaylist, notifyRemoteChanged } from "../lib/accountPlaylists";
+import { engine } from "../lib/engine";
 import { loginLastfm, useLastfm } from "../lib/lastfm";
 import { cancelScLogin, loginScToken, loginScWeb, useSc } from "../lib/soundcloud";
 import { cancelSpLogin, loginSp, loginSpCookie, useSp } from "../lib/spotify";
@@ -24,15 +26,33 @@ const Field = ({ label, children, hint }: { label: string; children: ReactNode; 
 );
 
 function CreatePlaylist({ props, close }: P) {
-  const [name, setName] = useState(""); const [sync, setSync] = useState(false);
+  const [name, setName] = useState(""); const [sync, setSync] = useState(!!props.account);
   const n = props.trackIds?.length ?? 0;
-  const create = () => { if (!name.trim()) return; const id = useLib.getState().createPlaylist(name.trim(), props.trackIds ?? [], { synced: sync }); close(); toast(n ? `Playlist criada com ${n} músicas` : "Playlist criada", { label: "Abrir", fn: () => nav(`playlist/${id}`) }); if (!n) nav(`playlist/${id}`); };
+  const create = () => {
+    if (!name.trim()) return;
+    // "Sincronizar com a conta": cria também (de verdade) no YouTube Music, com as faixas que forem de lá
+    if (sync && isTauri && useYt.getState().info) {
+      const ytIds = ((props.trackIds ?? []) as string[]).filter((i) => getTrack(i)?.ext?.provider === "youtube");
+      void createAccountPlaylist("youtube", name.trim(), ytIds);
+      if (props.account) { close(); return; } // veio do menu da conta: só cria lá
+    }
+    const id = useLib.getState().createPlaylist(name.trim(), props.trackIds ?? [], { synced: sync }); close(); toast(n ? `Playlist criada com ${n} músicas` : "Playlist criada", { label: "Abrir", fn: () => nav(`playlist/${id}`) }); };
   return (
     <Modal title="Nova playlist" subtitle={n ? `${n} ${n === 1 ? "música será adicionada" : "músicas serão adicionadas"}` : undefined} onClose={close} footer={<ConfirmFooter onCancel={close} onConfirm={create} confirm="Criar" disabled={!name.trim()} />}>
       <Field label="Nome"><TextField autoFocus value={name} onChange={setName} placeholder="Minha playlist" onEnter={create} /></Field>
       <div className="flex items-center gap-3 p-3.5 rounded-xl bg-s2"><div className="flex-1"><div className="font-medium">Sincronizar com a conta</div><div className="text-t3 text-[0.82rem]">Cria a playlist também no YouTube Music. Não pode ser desfeito depois.</div></div><Switch on={sync} onChange={setSync} /></div>
     </Modal>
   );
+}
+
+function RenameRemote({ props, close }: P) {
+  const [name, setName] = useState<string>(props.name ?? "");
+  const save = async () => {
+    if (!name.trim()) return;
+    try { await engine.playlistRename(props.provider, props.id, name.trim()); toast("Playlist renomeada"); notifyRemoteChanged(); close(); }
+    catch (e) { toast(`Não foi possível renomear: ${e}`); }
+  };
+  return <Modal title="Renomear playlist" onClose={close} footer={<ConfirmFooter onCancel={close} onConfirm={save} confirm="Salvar" />}><Field label="Nome"><TextField autoFocus value={name} onChange={setName} onEnter={save} /></Field></Modal>;
 }
 
 function EditPlaylist({ props, close }: P) {
@@ -468,7 +488,7 @@ function Update({ close }: P) {
 const MAP: Record<string, (p: P) => ReactNode> = {
   createPlaylist: CreatePlaylist, editPlaylist: EditPlaylist, editCover: EditCover, duplicates: Duplicates, confirm: Confirm, share: Share, source: Source, editSong: EditSong, editArtist: EditArtist,
   details: Details, sleep: Sleep, tempo: Tempo, cast: CastDialog, mini: Mini, import: Import, shortcuts: Shortcuts, login: Login, logout: Logout,
-  lyricsSearch: LyricsSearch, lyricsEdit: LyricsEdit, lyricsOffset: LyricsOffset, lyricsImage: LyricsImage, timeTransfer: TimeTransfer, update: Update,
+  renameRemote: RenameRemote, lyricsSearch: LyricsSearch, lyricsEdit: LyricsEdit, lyricsOffset: LyricsOffset, lyricsImage: LyricsImage, timeTransfer: TimeTransfer, update: Update,
 };
 export function Dialogs() {
   const dialog = useUI((s) => s.dialog), close = useUI((s) => s.closeDialog);

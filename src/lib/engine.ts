@@ -19,7 +19,7 @@ export interface RTile { title: string; browseId: string; params?: string | null
 export interface RExplore { title: string; sections: RSection[]; groups: { title: string; tiles: RTile[] }[] }
 export interface RChip { title: string; browseId: string; params?: string | null }
 export interface RHome { chips: RChip[]; sections: RSection[]; continuation?: string | null; personalized: boolean }
-export interface RPage { kind: string; id: string; title: string; subtitle: string; description?: string | null; artwork?: string | null; tracks: ExtInfo[]; sections: RSection[]; items: RItem[] }
+export interface RPage { kind: string; id: string; title: string; subtitle: string; description?: string | null; artwork?: string | null; tracks: ExtInfo[]; sections: RSection[]; items: RItem[]; editable?: boolean; audioPlaylistId?: string | null }
 
 /** Provedores que tocam músicas inteiras, na ordem em que o app tenta achar a mesma faixa (para o Deezer). */
 export function playbackOrder(): string[] {
@@ -71,6 +71,15 @@ export const engine = {
   spRate: (trackId: string, like: boolean) => invoke("sp_rate", { trackId, like }),
   /** Página de uma coleção de qualquer fonte, pelo prefixo do id (`sc:`, `sp:` ou YouTube Music). */
   page: (id: string) => (id.startsWith("sc:") ? invoke<RPage>("sc_playlist", { id }) : id.startsWith("sp:") ? invoke<RPage>("sp_page", { id }) : invoke<RPage>("yt_page", { browseId: id })),
+  // ───────── Playlists e biblioteca da conta (YouTube Music e Spotify)
+  playlistsEditable: (provider: string, trackId?: string) => invoke<RCollection[]>("playlists_editable", { provider, trackId: trackId ?? null }),
+  playlistAdd: (provider: string, playlistId: string, trackIds: string[]) => invoke("playlist_add", { provider, playlistId, trackIds }),
+  playlistRemove: (provider: string, playlistId: string, items: { trackId: string; setId?: string | null }[]) => invoke("playlist_remove", { provider, playlistId, items }),
+  playlistMove: (provider: string, playlistId: string, setId: string, beforeSetId?: string | null) => invoke("playlist_move", { provider, playlistId, setId, beforeSetId: beforeSetId ?? null }),
+  playlistCreate: (provider: string, title: string, trackIds: string[]) => invoke<string>("playlist_create", { provider, title, trackIds }),
+  playlistRename: (provider: string, playlistId: string, name: string) => invoke("playlist_rename", { provider, playlistId, name }),
+  playlistDelete: (provider: string, playlistId: string) => invoke("playlist_delete", { provider, playlistId }),
+  librarySave: (provider: string, kind: "album" | "playlist" | "artist", id: string, save: boolean) => invoke("library_save", { provider, kind, id, save }),
   ytHome: (chip?: RChip | null, continuation?: string | null) => invoke<RHome>("yt_home", { chipBrowseId: chip?.browseId, chipParams: chip?.params, continuation }),
   ytPage: (browseId: string) => invoke<RPage>("yt_page", { browseId }),
   ytRadio: (videoId?: string | null, playlistId?: string | null) => invoke<ExtInfo[]>("yt_radio", { videoId, playlistId }),

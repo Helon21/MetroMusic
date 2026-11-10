@@ -32,6 +32,9 @@ pub struct TrackInfo {
     pub album_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artist_id: Option<String>,
+    /// Identificador da faixa DENTRO de uma playlist (YouTube: `setVideoId`; Spotify: `uid`), necessário para remover/mover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_id: Option<String>,
 }
 
 impl TrackInfo {

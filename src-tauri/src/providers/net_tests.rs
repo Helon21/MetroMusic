@@ -428,3 +428,44 @@ async fn net_spotify_autorizacao_do_dispositivo() {
     println!("SPDEV {st} {}", body.chars().take(300).collect::<String>());
     assert!(st.is_success() && body.contains("device_code"));
 }
+
+fn find_strings(v: &serde_json::Value, needle: &str, here: String, out: &mut Vec<String>) {
+    match v {
+        serde_json::Value::String(s) => { if s.contains(needle) { out.push(format!("{here} = {}", s.chars().take(60).collect::<String>())); } }
+        serde_json::Value::Object(m) => for (k, x) in m { find_strings(x, needle, format!("{here}.{k}"), out); },
+        serde_json::Value::Array(a) => for (i, x) in a.iter().enumerate() { find_strings(x, needle, format!("{here}[{i}]"), out); },
+        _ => {}
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn net_yt_ids() {
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let liked = super::ytmusic::library("songs").await.unwrap();
+    let alb = liked.tracks.iter().find_map(|t| t.album_id.clone()).unwrap();
+    let v = super::ytmusic::debug_raw(&alb).await;
+    let mut o = vec![]; find_strings(&v, "OLAK5uy", String::new(), &mut o);
+    println!("YTIDS álbum {alb}: {} ocorrências de OLAK5uy", o.len()); for l in o.iter().filter(|l| l.contains("watchEndpoint") || l.contains("Playlist")).take(3) { let t: String = l.chars().rev().take(150).collect::<Vec<_>>().into_iter().rev().collect(); println!("YTIDS   …{t}"); }
+    let pls = super::ytmusic::library("playlists").await.unwrap();
+    for it in pls.items.iter().take(8) { if let Some(c) = &it.collection { println!("YTIDS playlist {:?} {}", c.title, c.id); } }
+    let own = pls.items.iter().filter_map(|i| i.collection.as_ref()).find(|c| c.subtitle.contains("Carlos") && c.id.starts_with("VLPL")).map(|c| c.id.clone());
+    if let Some(id) = own {
+        let v = super::ytmusic::debug_raw(&id).await;
+        let mut o = vec![]; find_strings(&v, "", String::new(), &mut o);
+        let set: Vec<_> = o.iter().filter(|l| l.contains("playlistSetVideoId") || l.contains("PlaylistSetVideoId")).take(2).collect();
+        for l in set.iter() { let t: String = l.chars().rev().take(150).collect::<Vec<_>>().into_iter().rev().collect(); println!("YTIDS setVideoId …{t}"); }
+        let mut h = vec![]; paths(&v, "musicEditablePlaylistDetailHeaderRenderer", String::new(), &mut h); println!("YTIDS cabeçalho editável: {}", h.len());
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn net_yt_playlists_editaveis() {
+    // SÓ LEITURA: a lista que o botão "Salvar na playlist" do site usa
+    let dir = std::env::var("MM_AUTH_DIR").expect("MM_AUTH_DIR");
+    crate::providers::auth::init(std::path::PathBuf::from(dir).join("youtube-auth.json"));
+    let v = super::ytmusic::editable_playlists(None).await;
+    match v { Ok(l) => println!("YTEDIT {} playlists editáveis: {:?}", l.len(), l.iter().take(6).map(|c| (&c.title, &c.id)).collect::<Vec<_>>()), Err(e) => println!("YTEDIT erro: {e}") }
+}

@@ -179,7 +179,7 @@ pub(super) fn parse_item(r: &Value) -> Option<TrackInfo> {
     });
     Some(TrackInfo {
         provider: "youtube".into(), url: Some(format!("https://music.youtube.com/watch?v={id}")), id, title, artists, album,
-        duration_ms: duration, isrc: None, artwork_url: artwork, explicit, preview_url: None, album_id, artist_id,
+        duration_ms: duration, isrc: None, artwork_url: artwork, explicit, preview_url: None, album_id, artist_id, set_id: None,
     })
 }
 

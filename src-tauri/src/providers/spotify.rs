@@ -402,21 +402,26 @@ pub async fn page(id: &str) -> Res<Page> {
         ("playlist", _) => {
             let uri = format!("spotify:playlist:{raw}");
             let (mut tracks, mut offset) = (vec![], 0usize);
-            let (mut title, mut desc, mut art, mut owner) = (String::new(), None, None, String::new());
+            let (mut title, mut desc, mut art, mut owner, mut owned) = (String::new(), None, None, String::new(), false);
             loop {
                 let v = gql("fetchPlaylist", json!({ "uri": uri, "offset": offset, "limit": 100, "enableWatchFeedEntrypoint": true })).await?;
                 let pl = v.pointer("/data/playlistV2").ok_or("Spotify: playlist indisponível (pode ser privada ou ter sido removida)")?;
                 if offset == 0 {
                     title = s(pl, "name").unwrap_or_default(); desc = s(pl, "description");
                     art = image(pl, "/images/items/0/sources/0/url"); owner = s(&pl["ownerV2"]["data"], "name").unwrap_or_default();
+                    owned = pl.pointer("/currentUserCapabilities/canEditItems").and_then(|c| c.as_bool()).unwrap_or(false);
                 }
                 let items = pl.pointer("/content/items").and_then(|i| i.as_array()).cloned().unwrap_or_default();
-                tracks.extend(items.iter().filter_map(|i| to_track(i.pointer("/itemV2/data")?, None, None)));
+                tracks.extend(items.iter().filter_map(|i| {
+                    let mut t = to_track(i.pointer("/itemV2/data")?, None, None)?;
+                    t.set_id = i.get("uid").and_then(|u| u.as_str()).map(str::to_string); // necessário para remover/mover
+                    Some(t)
+                }));
                 offset += items.len();
                 let total = pl.pointer("/content/totalCount").and_then(|t| t.as_u64()).unwrap_or(0);
                 if items.is_empty() || offset as u64 >= total || tracks.len() >= MAX_ITEMS { break; }
             }
-            Ok(Page { kind: "playlist".into(), id: id.into(), title, subtitle: owner, description: desc, artwork: art, tracks, ..Default::default() })
+            Ok(Page { kind: "playlist".into(), id: id.into(), title, subtitle: owner, description: desc, artwork: art, tracks, editable: owned, ..Default::default() })
         }
         ("album", _) => {
             let uri = format!("spotify:album:{raw}");
@@ -493,6 +498,80 @@ pub async fn rate(track_id: &str, like: bool) -> Res<()> {
         Some(e) => Err(format!("Spotify recusou a alteração: {}", e[0].to_string().chars().take(120).collect::<String>())),
         None => Ok(()),
     }
+}
+
+// ───────── Gerenciar playlists e biblioteca
+
+fn check_errors(v: &Value, what: &str) -> Res<()> {
+    match v.get("errors").and_then(|e| e.as_array()).filter(|e| !e.is_empty()) {
+        Some(e) => Err(format!("O Spotify recusou ({what}): {}", e[0].get("message").and_then(|m| m.as_str()).unwrap_or("erro").chars().take(140).collect::<String>())),
+        None => Ok(()),
+    }
+}
+
+fn playlist_uri(id: &str) -> String {
+    format!("spotify:playlist:{}", id.rsplit(':').next().unwrap_or(id))
+}
+
+/// Playlists da conta onde dá para mexer (as suas e as colaborativas).
+pub async fn editable_playlists() -> Res<Vec<CollectionRef>> {
+    let mut out = vec![];
+    let mut offset = 0usize;
+    loop {
+        let vars = json!({ "filters": ["Playlists"], "order": null, "textFilter": "", "features": ["LIKED_SONGS"], "limit": PAGE, "offset": offset, "flatten": false, "expandedFolders": [], "folderUri": null, "includeFoldersWhenFlattening": true, "withCuration": false });
+        let v = gql("libraryV3", vars).await?;
+        let lib = v.pointer("/data/me/libraryV3").ok_or("Spotify: resposta da biblioteca inesperada")?;
+        let items = lib.get("items").and_then(|i| i.as_array()).cloned().unwrap_or_default();
+        for it in &items {
+            let (Some(node), Some(d)) = (it.get("item"), it.pointer("/item/data")) else { continue };
+            if d.get("__typename").and_then(|t| t.as_str()) != Some("Playlist") { continue; }
+            // editável = o Spotify diz que a conta pode editar os itens
+            if d.pointer("/currentUserCapabilities/canEditItems").and_then(|c| c.as_bool()) != Some(true) { continue; }
+            if let Some(Item { collection: Some(c), .. }) = library_item(&json!({ "item": node })) { out.push(c); }
+        }
+        offset += items.len();
+        let total = lib.get("totalCount").and_then(|t| t.as_u64()).unwrap_or(0);
+        if items.is_empty() || offset as u64 >= total { break; }
+    }
+    Ok(out)
+}
+
+pub async fn add_to_playlist(playlist_id: &str, track_ids: &[String]) -> Res<()> {
+    if track_ids.is_empty() { return Ok(()); }
+    let uris: Vec<String> = track_ids.iter().map(|t| format!("spotify:track:{t}")).collect();
+    let v = gql("addToPlaylist", json!({ "playlistUri": playlist_uri(playlist_id), "playlistItemUris": uris, "newPosition": { "moveType": "BOTTOM_OF_PLAYLIST", "fromUid": null } })).await?;
+    check_errors(&v, "adicionar à playlist")
+}
+
+/// `items`: (id da faixa, uid dela na playlist). Sem o uid, ele é procurado na própria playlist.
+pub async fn remove_from_playlist(playlist_id: &str, items: &[(String, Option<String>)]) -> Res<()> {
+    if items.is_empty() { return Ok(()); }
+    let current = if items.iter().any(|(_, u)| u.is_none()) { page(&format!("sp:playlist:{}", playlist_id.rsplit(':').next().unwrap_or(playlist_id))).await?.tracks } else { vec![] };
+    let mut taken = std::collections::HashSet::new();
+    let mut uids = vec![];
+    for (tid, uid) in items {
+        let uid = uid.clone().or_else(|| current.iter().find(|t| &t.id == tid && t.set_id.as_ref().map_or(false, |u| !taken.contains(u))).and_then(|t| t.set_id.clone()))
+            .ok_or_else(|| format!("a faixa {tid} não está nesta playlist"))?;
+        taken.insert(uid.clone());
+        uids.push(uid);
+    }
+    let v = gql("removeFromPlaylist", json!({ "playlistUri": playlist_uri(playlist_id), "uids": uids })).await?;
+    check_errors(&v, "remover da playlist")
+}
+
+/// Põe a faixa `uid` antes da faixa `before_uid` (`None` = no fim).
+pub async fn move_in_playlist(playlist_id: &str, uid: &str, before_uid: Option<&str>) -> Res<()> {
+    let pos = match before_uid { Some(b) => json!({ "moveType": "BEFORE_UID", "fromUid": b }), None => json!({ "moveType": "BOTTOM_OF_PLAYLIST", "fromUid": null }) };
+    let v = gql("moveItemsInPlaylist", json!({ "playlistUri": playlist_uri(playlist_id), "uids": [uid], "newPosition": pos })).await?;
+    check_errors(&v, "mover na playlist")
+}
+
+/// Salva ou remove da biblioteca um álbum, playlist ou artista (seguir).
+pub async fn library_save(kind: &str, id: &str, save: bool) -> Res<()> {
+    if !matches!(kind, "album" | "playlist" | "artist") { return Err(format!("tipo de item desconhecido: {kind}")); }
+    let uri = format!("spotify:{kind}:{}", id.rsplit(':').next().unwrap_or(id));
+    let v = gql(if save { "addToLibrary" } else { "removeFromLibrary" }, json!({ "libraryItemUris": [uri] })).await?;
+    check_errors(&v, "biblioteca")
 }
 
 #[cfg(test)]

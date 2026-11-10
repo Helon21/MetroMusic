@@ -62,6 +62,24 @@ Cada sessão fica num arquivo no diretório de dados do app (permissão `0600`);
 
 **Last.fm:** a chave e o segredo da API vêm de last.fm/api/account/create (ou das variáveis de build `MM_LASTFM_KEY`/`MM_LASTFM_SECRET`).
 
+## Playlists e biblioteca da conta
+
+Comandos genéricos (`provider` = `youtube` ou `spotify`): `playlists_editable`, `playlist_add`, `playlist_remove`, `playlist_move`, `playlist_create`, `playlist_rename`, `playlist_delete`, `library_save` (álbum, playlist ou artista).
+
+| Operação | YouTube Music | Spotify |
+| --- | --- | --- |
+| Listar playlists editáveis | da biblioteca: id `PL…` com o seu nome como dono | da biblioteca: `canEditItems` |
+| Adicionar faixas | `browse/edit_playlist` (`ACTION_ADD_VIDEO`) | `addToPlaylist` (fim da playlist) |
+| Remover faixas | `ACTION_REMOVE_VIDEO` (precisa do `setVideoId`) | `removeFromPlaylist` (precisa do `uid`) |
+| Reordenar | `ACTION_MOVE_VIDEO_BEFORE` | `moveItemsInPlaylist` |
+| Criar / renomear / excluir | `playlist/create`, `ACTION_SET_PLAYLIST_NAME`, `playlist/delete` | **não disponível** (o player web usa um protocolo próprio) |
+| Salvar / remover da biblioteca | `like/like` e `like/removelike` (álbum: pelo id `OLAK5uy…` da playlist de áudio) | `addToLibrary` / `removeFromLibrary` |
+| Seguir artista | `subscription/subscribe` e `unsubscribe` | `addToLibrary` / `removeFromLibrary` com o artista |
+
+O id da faixa dentro da playlist (`setId` no `TrackInfo`) vem de `playlistItemData.playlistSetVideoId` (YouTube) e do `uid` do item (Spotify). Sem ele, a remoção o procura na própria playlist.
+
+**Validado com contas reais (Spotify):** adicionar e remover faixa numa playlist sua (0 → 1 → 0), salvar/remover álbum (8 → 9 → 8) e seguir/deixar de seguir artista (2 → 3 → 2), curtir/descurtir. **Validado só por leitura (YouTube Music):** lista de playlists editáveis e onde ficam o `setVideoId` e o id de áudio do álbum. **Ainda sem teste real:** todas as escritas do YouTube Music, mover faixa no Spotify e salvar playlist de outra pessoa no Spotify (o teste que fiz não mudou a contagem).
+
 ## Cache e pré-cache
 
 - Cada faixa é um arquivo + um `.json` de metadados em `~/.cache/dev.caduhd4.metromusic/songs`. A chave é `fonte:id` da **fonte do áudio**.
@@ -119,7 +137,7 @@ Build: o `src-tauri/target` passa de 10 GB; limpe com `cargo clean` ao terminar 
 - Last.fm e SoundCloud: o login e a sincronização dependem de uma conta real e ainda não foram validados de ponta a ponta. O Spotify foi validado, menos o histórico por faixa, que não tem fonte.
 - Sem downloads offline nem biblioteca local (Baixadas, Arquivos locais, Enviadas).
 - Tidal, Qobuz e JioSaavn não têm backend; Deezer não tem login.
-- A biblioteca da conta é lida e as curtidas/histórico são enviados, mas criar ou editar playlists, seguir artistas e salvar álbuns não voltam para as contas.
+- Criar, renomear e excluir playlists só existem no YouTube Music; no Spotify ficam de fora. As escritas do YouTube Music ainda não foram testadas com a conta real.
 - Letras reais só de BetterLyrics e LrcLib; tradução, edição e busca manual de letra são simuladas.
 - Podcasts, Ouvir junto, Reconhecer música, Discord Rich Presence e Cast continuam simulados. O assistente AutoEQ gera valores de exemplo e os perfis do equalizador não são salvos.
 - O Recap em vídeo 9:16 do YouTube não tem API conhecida; a Retrospectiva monta os slides com os dados dos Recaps reais.

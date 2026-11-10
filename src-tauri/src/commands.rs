@@ -342,3 +342,85 @@ pub async fn sp_page(id: String) -> Res<ytmusic::Page> { providers::spotify::pag
 
 #[tauri::command]
 pub async fn sp_rate(track_id: String, like: bool) -> Res<()> { providers::spotify::rate(&track_id, like).await }
+
+// ───────── Gerenciar playlists e biblioteca (YouTube Music e Spotify)
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistItem { pub track_id: String, pub set_id: Option<String> }
+
+fn unsupported(provider: &str, what: &str) -> String { format!("{what} ainda não está disponível para {provider}") }
+
+/// Playlists onde dá para adicionar músicas (`track_id`: o YouTube marca onde a música já está).
+#[tauri::command]
+pub async fn playlists_editable(provider: String, track_id: Option<String>) -> Res<Vec<ytmusic::CollectionRef>> {
+    match provider.as_str() {
+        "youtube" => ytmusic::editable_playlists(track_id.as_deref()).await,
+        "spotify" => providers::spotify::editable_playlists().await,
+        p => Err(unsupported(p, "Editar playlists")),
+    }
+}
+
+#[tauri::command]
+pub async fn playlist_add(provider: String, playlist_id: String, track_ids: Vec<String>) -> Res<()> {
+    match provider.as_str() {
+        "youtube" => ytmusic::add_to_playlist(&playlist_id, &track_ids).await,
+        "spotify" => providers::spotify::add_to_playlist(&playlist_id, &track_ids).await,
+        p => Err(unsupported(p, "Adicionar à playlist")),
+    }
+}
+
+#[tauri::command]
+pub async fn playlist_remove(provider: String, playlist_id: String, items: Vec<PlaylistItem>) -> Res<()> {
+    let items: Vec<(String, Option<String>)> = items.into_iter().map(|i| (i.track_id, i.set_id)).collect();
+    match provider.as_str() {
+        "youtube" => ytmusic::remove_from_playlist(&playlist_id, &items).await,
+        "spotify" => providers::spotify::remove_from_playlist(&playlist_id, &items).await,
+        p => Err(unsupported(p, "Remover da playlist")),
+    }
+}
+
+#[tauri::command]
+pub async fn playlist_move(provider: String, playlist_id: String, set_id: String, before_set_id: Option<String>) -> Res<()> {
+    match provider.as_str() {
+        "youtube" => ytmusic::move_in_playlist(&playlist_id, &set_id, before_set_id.as_deref()).await,
+        "spotify" => providers::spotify::move_in_playlist(&playlist_id, &set_id, before_set_id.as_deref()).await,
+        p => Err(unsupported(p, "Reordenar a playlist")),
+    }
+}
+
+/// Cria uma playlist (só YouTube Music por enquanto) e devolve o id.
+#[tauri::command]
+pub async fn playlist_create(provider: String, title: String, track_ids: Vec<String>) -> Res<String> {
+    match provider.as_str() {
+        "youtube" => ytmusic::create_playlist(&title, &track_ids).await,
+        "spotify" => Err("Criar playlists no Spotify ainda não está disponível (o player web usa um protocolo próprio para isso)".into()),
+        p => Err(unsupported(p, "Criar playlists")),
+    }
+}
+
+#[tauri::command]
+pub async fn playlist_rename(provider: String, playlist_id: String, name: String) -> Res<()> {
+    match provider.as_str() {
+        "youtube" => ytmusic::rename_playlist(&playlist_id, &name).await,
+        p => Err(unsupported(p, "Renomear playlists")),
+    }
+}
+
+#[tauri::command]
+pub async fn playlist_delete(provider: String, playlist_id: String) -> Res<()> {
+    match provider.as_str() {
+        "youtube" => ytmusic::delete_playlist(&playlist_id).await,
+        p => Err(unsupported(p, "Excluir playlists")),
+    }
+}
+
+/// Salva ou remove da biblioteca da conta: `kind` = album, playlist ou artist (seguir).
+#[tauri::command]
+pub async fn library_save(provider: String, kind: String, id: String, save: bool) -> Res<()> {
+    match provider.as_str() {
+        "youtube" => ytmusic::library_save(&kind, &id, save).await,
+        "spotify" => providers::spotify::library_save(&kind, &id, save).await,
+        p => Err(unsupported(p, "Salvar na biblioteca")),
+    }
+}

@@ -10,6 +10,8 @@ export interface ExtInfo {
   explicit?: boolean; url?: string | null; previewUrl?: string | null;
   /** ids de navegação do YouTube Music (álbum MPRE…, canal UC…) */
   albumId?: string | null; artistId?: string | null;
+  /** id da faixa DENTRO de uma playlist (YouTube: setVideoId; Spotify: uid): necessário para remover/mover */
+  setId?: string | null;
 }
 export interface Artist {
   id: string; name: string; hue: number; seed: number; genre: string;

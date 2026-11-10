@@ -70,6 +70,11 @@ pub struct Page {
     pub sections: Vec<Section>,
     /// Itens de grade (listas da biblioteca: playlists, álbuns, artistas salvos)
     pub items: Vec<Item>,
+    /// Álbuns: id da playlist de áudio (`OLAK5uy…`), com a qual o álbum é salvo na biblioteca.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_playlist_id: Option<String>,
+    /// Playlist que a conta pode editar (adicionar, remover, renomear, excluir).
+    pub editable: bool,
 }
 
 // ───────── Utilidades de JSON
@@ -100,6 +105,16 @@ fn collect<'a>(v: &'a Value, key: &str, out: &mut Vec<&'a Value>) {
 }
 
 fn find_all<'a>(v: &'a Value, key: &str) -> Vec<&'a Value> { let mut o = vec![]; collect(v, key, &mut o); o }
+
+/// Primeira string do documento que começa com `prefix` (ex.: o id `OLAK5uy…` da playlist de áudio de um álbum).
+fn first_string_with_prefix(v: &Value, prefix: &str) -> Option<String> {
+    match v {
+        Value::String(s) => s.starts_with(prefix).then(|| s.clone()),
+        Value::Object(m) => m.values().find_map(|x| first_string_with_prefix(x, prefix)),
+        Value::Array(a) => a.iter().find_map(|x| first_string_with_prefix(x, prefix)),
+        _ => None,
+    }
+}
 
 fn is_explicit(r: &Value) -> bool {
     r.get("badges").and_then(|b| b.as_array()).map_or(false, |b| b.iter().any(|x| at(x, "musicInlineBadgeRenderer.icon.iconType").and_then(|i| i.as_str()) == Some("MUSIC_EXPLICIT_BADGE")))
@@ -265,7 +280,8 @@ fn page_track(r: &Value, album: Option<&str>, fallback_artists: &[String], fallb
     let (artist_id, album_id) = link_ids((1..4).filter_map(col).flat_map(|c| c.get("runs").and_then(|r| r.as_array()).into_iter().flatten()));
     Some(TrackInfo {
         provider: "youtube".into(), url: Some(format!("https://music.youtube.com/watch?v={id}")), id, title, artists, album: album_name, duration_ms: duration,
-        artwork_url: thumb(r).or_else(|| fallback_art.clone()), explicit: is_explicit(r), artist_id, album_id, ..Default::default()
+        artwork_url: thumb(r).or_else(|| fallback_art.clone()), explicit: is_explicit(r), artist_id, album_id,
+        set_id: at(r, "playlistItemData.playlistSetVideoId").and_then(|v| v.as_str()).map(str::to_string), ..Default::default()
     })
 }
 
@@ -316,7 +332,9 @@ pub async fn page(browse_id: &str) -> Res<Page> {
     let sections = find_all(&v, "musicCarouselShelfRenderer").into_iter().filter_map(carousel).collect();
     let items = find_all(&v, "gridRenderer").into_iter().flat_map(|g| g.get("items").and_then(|i| i.as_array()).into_iter().flatten()).filter_map(|i| i.get("musicTwoRowItemRenderer")).filter_map(two_row).collect();
     if kind == "album" { for t in tracks.iter_mut() { t.album_id.get_or_insert_with(|| browse_id.to_string()); } }
-    Ok(Page { kind: kind.into(), id: browse_id.into(), title, subtitle, description, artwork, tracks, sections, items })
+    let editable = !find_all(&v, "musicEditablePlaylistDetailHeaderRenderer").is_empty();
+    let audio_playlist_id = if kind == "album" { first_string_with_prefix(&v, "OLAK5uy") } else { None };
+    Ok(Page { kind: kind.into(), id: browse_id.into(), title, subtitle, description, artwork, tracks, sections, items, audio_playlist_id, editable })
 }
 
 /// Fila de "rádio": músicas parecidas com `video_id`, ou o conteúdo de um mix/playlist de reprodução (`playlist_id`).
@@ -349,6 +367,99 @@ pub async fn radio(video_id: Option<&str>, playlist_id: Option<&str>) -> Res<Vec
             duration_ms: r.get("lengthText").and_then(first_run).and_then(|t| parse_duration(&t)), artwork_url: thumb(r), explicit: is_explicit(r), ..Default::default()
         })
     }).collect())
+}
+
+// ───────── Gerenciar playlists e biblioteca (exigem sessão)
+
+/// Id de playlist sem o prefixo `VL` que o `browse` usa.
+fn plain_id(id: &str) -> &str { id.strip_prefix("VL").unwrap_or(id) }
+
+async fn write(endpoint: &str, extra: Value) -> Res<Value> {
+    need_login()?;
+    let visitor = visitor_data().await;
+    let mut ctx = context(&WEB_REMIX, &visitor);
+    if let Some(d) = auth::on_behalf_of() { ctx["user"]["onBehalfOfUser"] = json!(d); }
+    let mut body = json!({ "context": ctx });
+    if let (Some(b), Some(e)) = (body.as_object_mut(), extra.as_object()) { for (k, v) in e { b.insert(k.clone(), v.clone()); } }
+    post(endpoint, &WEB_REMIX, &visitor, body, true).await
+}
+
+/// `browse/edit_playlist` com várias ações; o YouTube responde `STATUS_SUCCEEDED`.
+async fn edit_playlist(playlist_id: &str, actions: Vec<Value>) -> Res<()> {
+    let v = write("browse/edit_playlist", json!({ "playlistId": plain_id(playlist_id), "actions": actions })).await?;
+    match v.get("status").and_then(|s| s.as_str()) {
+        Some("STATUS_SUCCEEDED") => Ok(()),
+        other => Err(format!("o YouTube Music não aceitou a alteração da playlist ({})", other.unwrap_or("sem status"))),
+    }
+}
+
+/// Cria uma playlist privada (opcionalmente já com músicas) e devolve o id.
+pub async fn create_playlist(title: &str, video_ids: &[String]) -> Res<String> {
+    if title.trim().is_empty() { return Err("dê um nome à playlist".into()); }
+    let mut extra = json!({ "title": title.trim(), "privacyStatus": "PRIVATE" });
+    if !video_ids.is_empty() { extra["videoIds"] = json!(video_ids); }
+    let v = write("playlist/create", extra).await?;
+    v.get("playlistId").and_then(|p| p.as_str()).map(str::to_string).ok_or_else(|| "o YouTube Music não devolveu o id da nova playlist".into())
+}
+
+pub async fn delete_playlist(playlist_id: &str) -> Res<()> {
+    write("playlist/delete", json!({ "playlistId": plain_id(playlist_id) })).await.map(|_| ())
+}
+
+pub async fn rename_playlist(playlist_id: &str, name: &str) -> Res<()> {
+    if name.trim().is_empty() { return Err("o nome não pode ficar vazio".into()); }
+    edit_playlist(playlist_id, vec![json!({ "action": "ACTION_SET_PLAYLIST_NAME", "playlistName": name.trim() })]).await
+}
+
+pub async fn add_to_playlist(playlist_id: &str, video_ids: &[String]) -> Res<()> {
+    if video_ids.is_empty() { return Ok(()); }
+    edit_playlist(playlist_id, video_ids.iter().map(|v| json!({ "action": "ACTION_ADD_VIDEO", "addedVideoId": v })).collect()).await
+}
+
+/// Tira músicas da playlist. `items`: (videoId, setVideoId); sem `setVideoId` ele é procurado na própria playlist.
+pub async fn remove_from_playlist(playlist_id: &str, items: &[(String, Option<String>)]) -> Res<()> {
+    if items.is_empty() { return Ok(()); }
+    let missing = items.iter().any(|(_, s)| s.is_none());
+    let current = if missing { page(&format!("VL{}", plain_id(playlist_id))).await?.tracks } else { vec![] };
+    let mut taken = std::collections::HashSet::new();
+    let mut actions = vec![];
+    for (vid, set) in items {
+        let set = set.clone().or_else(|| current.iter().find(|t| &t.id == vid && t.set_id.as_ref().map_or(false, |s| !taken.contains(s))).and_then(|t| t.set_id.clone()))
+            .ok_or_else(|| format!("a música {vid} não está nesta playlist"))?;
+        taken.insert(set.clone());
+        actions.push(json!({ "action": "ACTION_REMOVE_VIDEO", "removedVideoId": vid, "setVideoId": set }));
+    }
+    edit_playlist(playlist_id, actions).await
+}
+
+/// Põe `set_id` antes de `before_set_id` (`None` = no fim).
+pub async fn move_in_playlist(playlist_id: &str, set_id: &str, before_set_id: Option<&str>) -> Res<()> {
+    let mut a = json!({ "action": "ACTION_MOVE_VIDEO_BEFORE", "setVideoId": set_id });
+    if let Some(b) = before_set_id { a["movedSetVideoIdSuccessor"] = json!(b); }
+    edit_playlist(playlist_id, vec![a]).await
+}
+
+/// As playlists da conta onde dá para adicionar músicas: as que são SUAS (id `PL…`, com o seu nome como dono).
+/// (O endpoint `get_add_to_playlist` do site responde 400 fora do navegador, então usamos a biblioteca.)
+pub async fn editable_playlists(_video_id: Option<&str>) -> Res<Vec<CollectionRef>> {
+    let name = account_info().await?.name;
+    let lib = library("playlists").await?;
+    Ok(lib.items.into_iter().filter_map(|i| i.collection).filter(|c| c.id.starts_with("VLPL") && c.subtitle.starts_with(&name)).collect())
+}
+
+/// Salva ou remove da biblioteca: `playlist` e `album` (pelo id da playlist de áudio) e `artist` (inscrição no canal).
+pub async fn library_save(kind: &str, id: &str, save: bool) -> Res<()> {
+    match kind {
+        "playlist" => write(if save { "like/like" } else { "like/removelike" }, json!({ "target": { "playlistId": plain_id(id) } })).await.map(|_| ()),
+        "album" => {
+            let audio = if id.starts_with("OLAK5uy") { id.to_string() } else {
+                page(id).await?.audio_playlist_id.ok_or("não achei a playlist de áudio deste álbum")?
+            };
+            write(if save { "like/like" } else { "like/removelike" }, json!({ "target": { "playlistId": audio } })).await.map(|_| ())
+        }
+        "artist" => write(if save { "subscription/subscribe" } else { "subscription/unsubscribe" }, json!({ "channelIds": [id] })).await.map(|_| ()),
+        other => Err(format!("tipo de item desconhecido: {other}")),
+    }
 }
 
 // ───────── Explorar
@@ -572,3 +683,26 @@ pub async fn debug_raw_cont(token: &str) -> Value { browse_more(token).await.unw
 
 #[cfg(test)]
 pub async fn debug_try(id: &str) -> Res<Value> { browse(json!({ "browseId": id })).await }
+
+#[cfg(test)]
+mod gerenciar_tests {
+    use super::*;
+    #[test]
+    fn id_de_playlist_perde_o_prefixo_vl() {
+        assert_eq!(plain_id("VLPLabc"), "PLabc");
+        assert_eq!(plain_id("PLabc"), "PLabc");
+    }
+    #[test]
+    fn acha_o_id_da_playlist_de_audio_do_album() {
+        let v = json!({ "a": [{ "b": { "playlistId": "RDabc" } }, { "watchEndpoint": { "playlistId": "OLAK5uy_xyz" } }] });
+        assert_eq!(first_string_with_prefix(&v, "OLAK5uy").as_deref(), Some("OLAK5uy_xyz"));
+        assert_eq!(first_string_with_prefix(&v, "ZZZ"), None);
+    }
+    #[test]
+    fn linha_de_playlist_traz_o_set_video_id() {
+        let row = json!({ "playlistItemData": { "videoId": "V1", "playlistSetVideoId": "SET1" },
+            "flexColumns": [{ "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Música" }] } } }] });
+        let t = page_track(&row, None, &["Fulano".into()], &None).unwrap();
+        assert_eq!((t.id.as_str(), t.set_id.as_deref()), ("V1", Some("SET1")));
+    }
+}

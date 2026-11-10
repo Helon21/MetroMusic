@@ -1,4 +1,5 @@
 import { CircleUser, Copy, Disc3, Download, FileDown, Heart, HeartOff, Info, ListEnd, ListPlus, ListStart, Pencil, Pin, PinOff, Play, Plus, Radio, RefreshCw, Share2, Shuffle, Trash2, Waypoints, Image, Clock, CloudUpload, Podcast, Users, BookmarkPlus, BookmarkCheck, Import } from "lucide-react";
+import { accountProviderOf, addToAccountPlaylist, loggedIn, providerName, refreshAccountPlaylists, removeFromAccountPlaylist, useAccountPlaylists } from "./accountPlaylists";
 import { artistTracks, getAlbum, getArtist, getTracks, type Album, type Artist, type Playlist, type Track } from "./catalog";
 import { copyText } from "./util";
 import { useLib, type Pin as PinT } from "../store/library";
@@ -9,11 +10,29 @@ const div: MenuItem = { divider: true };
 const P = () => usePlayer.getState();
 const L = () => useLib.getState();
 
+/** Playlists da conta (YouTube Music / Spotify) em que as faixas podem entrar, quando elas são desse serviço. */
+function accountPlaylistItems(ids: string[]): MenuItem[] {
+  const p = accountProviderOf(ids);
+  if (!p || !loggedIn(p)) return [];
+  const st = useAccountPlaylists.getState();
+  const list = st.lists[p];
+  if (list === null && !st.loading[p]) void refreshAccountPlaylists(p); // primeira vez: carrega; aparece na próxima abertura do menu
+  return [
+    div,
+    { label: providerName(p), header: true },
+    ...(p === "youtube" ? [{ label: "Nova playlist no YouTube Music…", icon: <Plus />, onClick: () => openDialog("createPlaylist", { trackIds: ids, account: p }) } as MenuItem] : []),
+    ...(list === null ? [{ label: "Carregando playlists da conta…", disabled: true } as MenuItem]
+      : list.length ? list.map((c): MenuItem => ({ label: c.title, onClick: () => addToAccountPlaylist(p, c, ids) }))
+      : [{ label: "Nenhuma playlist editável na conta", disabled: true } as MenuItem]),
+  ];
+}
+
 function playlistSub(ids: string[]): MenuItem[] {
   return [
     { label: "Nova playlist…", icon: <Plus />, onClick: () => openDialog("createPlaylist", { trackIds: ids }) },
     div,
     ...L().playlists.map((p): MenuItem => ({ label: p.title, onClick: () => addTo(p.id, ids) })),
+    ...accountPlaylistItems(ids),
   ];
 }
 export function addTo(playlistId: string, ids: string[]) {
@@ -39,7 +58,8 @@ const share = (title: string, kind: string, id: string): MenuItem => ({ label: "
   { label: "Mais opções…", icon: <Share2 />, onClick: () => openDialog("share", { title, kind, id }) },
 ] });
 
-export interface TrackCtx { playlistId?: string; queueIndex?: number; historyAt?: number; cache?: boolean; inRoom?: boolean }
+/** `remote`: a faixa está numa playlist da conta aberta na tela (permite remover dela). */
+export interface TrackCtx { remote?: { provider: "youtube" | "spotify"; playlistId: string }; playlistId?: string; queueIndex?: number; historyAt?: number; cache?: boolean; inRoom?: boolean }
 
 export function trackMenu(t: Track, ctx: TrackCtx = {}): MenuItem[] {
   const liked = L().liked.includes(t.id);
@@ -66,6 +86,7 @@ export function trackMenu(t: Track, ctx: TrackCtx = {}): MenuItem[] {
     { label: "Atualizar metadados", icon: <RefreshCw />, onClick: () => toast("Metadados atualizados") },
     { label: "Detalhes", icon: <Info />, onClick: () => openDialog("details", { id: t.id }) },
     ...(own ? [div, { label: "Remover desta playlist", icon: <Trash2 />, danger: true, onClick: () => { const prev = L().playlists.find((p) => p.id === ctx.playlistId)!.trackIds; L().removeFromPlaylist(ctx.playlistId!, [t.id]); toast(`"${t.title}" removida da playlist`, { label: "Desfazer", fn: () => L().updatePlaylist(ctx.playlistId!, { trackIds: prev }) }); } }] : []),
+    ...(ctx.remote ? [div, { label: "Remover desta playlist", icon: <Trash2 />, danger: true, onClick: () => removeFromAccountPlaylist(ctx.remote!.provider, ctx.remote!.playlistId, t.id) }] : []),
     ...(ctx.queueIndex !== undefined && ctx.queueIndex !== P().index ? [div, { label: "Remover da fila", icon: <Trash2 />, danger: true, onClick: () => P().remove(ctx.queueIndex!) }] : []),
     ...(ctx.historyAt ? [div, { label: "Remover do histórico", icon: <Trash2 />, danger: true, onClick: () => L().removeHistory(ctx.historyAt!) }] : []),
     ...(ctx.cache ? [div, { label: "Remover do cache", icon: <Trash2 />, danger: true, onClick: () => { useLib.setState((s) => ({ cached: s.cached.filter((c) => c !== t.id) })); toast("Removida do cache"); } }] : []),
