@@ -227,7 +227,7 @@ export function syncPrecache() {
   }, 250);
 }
 
-/** Liga os eventos `audio:*` ao player e leva ao backend as configurações de volume, cache e pré-cache. */
+/** Liga os eventos `audio:*` ao player e leva ao backend as configurações de volume, cache, pré-cache, EQ, normalização e crossfade. */
 export async function initBackend() {
   if (!backend) return;
   const P = usePlayer;
@@ -256,17 +256,42 @@ export async function initBackend() {
     if (p.duration) fixDuration(p.duration);
   });
   await onEvent<any>("audio:ended", (p) => { if (fresh(p)) P.getState().trackEnded(); });
+  await onEvent<any>("audio:advanced", (p) => {
+    if (!fresh(p)) return;
+    const s = P.getState();
+    const nextIdx = s.index + 1;
+    if (nextIdx < s.queue.length) {
+      P.setState({ index: nextIdx, position: 0, playing: true, buffering: true });
+      engine.play(getTrack(s.queue[nextIdx])!.ext!, 0).then((token) => { if (token && token > P.getState().engineToken) P.setState({ engineToken: token }); });
+    }
+  });
 
   const syncCache = () => { const mb = Number(getSetting("maxSongCache")); engine.cacheConfigure(mb < 0 ? 1_000_000 : mb, !!getSetting("songCache")); };
-  syncCache();
+  const syncAudio = () => {
+    engine.setNormalization(!!getSetting("normalization"), Number(getSetting("loudnessLevel")));
+    engine.setCrossfade(getSetting("crossfade") ? Number(getSetting("crossfadeDuration")) : 0);
+    if (getSetting("eqOn")) {
+      const gains = [
+        Number(getSetting("eq31")), Number(getSetting("eq62")), Number(getSetting("eq125")),
+        Number(getSetting("eq250")), Number(getSetting("eq500")), Number(getSetting("eq1k")),
+        Number(getSetting("eq2k")), Number(getSetting("eq4k")), Number(getSetting("eq8k")), Number(getSetting("eq16k")),
+      ];
+      engine.setEq(true, gains, Number(getSetting("eqPreamp")));
+    } else {
+      engine.setEq(false, [], 0);
+    }
+  };
+  syncCache(); syncAudio();
   const s0 = P.getState(); engine.setVolume(s0.muted ? 0 : s0.volume); engine.setSpeed(s0.speed);
   P.subscribe((s, prev) => { if (s.queue !== prev.queue || s.index !== prev.index || s.repeat !== prev.repeat) syncPrecache(); });
-  const watched = ["songCache", "maxSongCache", "preload", "providerOrder", "providerOff"];
+  const watched = ["songCache", "maxSongCache", "preload", "providerOrder", "providerOff",
+    "normalization", "loudnessLevel", "crossfade", "crossfadeDuration",
+    "eqOn", "eqPreamp", "eq31", "eq62", "eq125", "eq250", "eq500", "eq1k", "eq2k", "eq4k", "eq8k", "eq16k"];
   const read = () => JSON.stringify(watched.map((k) => getSetting(k)));
   let last = read();
   useSettings.subscribe(() => {
     const now = read(); if (now === last) return; last = now;
-    syncCache(); syncPrecache();
+    syncCache(); syncPrecache(); syncAudio();
   });
   syncPrecache();
 }

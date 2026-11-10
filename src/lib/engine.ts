@@ -75,4 +75,10 @@ export const engine = {
   cacheStats: () => invoke<{ bytes: number; entries: number; limit: number; enabled: boolean }>("cache_stats"),
   cacheClear: () => invoke("cache_clear"),
   cacheConfigure: (limitMb?: number, enabled?: boolean) => invoke("cache_configure", { limitMb, enabled }),
+
+  // ───────── Motor de áudio: equalizador, normalização, crossfade, advance
+  setEq: (on: boolean, gains: number[], preamp: number) => invoke("audio_set_eq", { on, gains, preamp }),
+  setNormalization: (on: boolean, target: number) => invoke("audio_set_normalization", { on, target }),
+  setCrossfade: (secs: number) => invoke("audio_set_crossfade", { secs }),
+  advance: () => invoke("audio_advance"),
 };

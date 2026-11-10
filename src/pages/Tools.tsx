@@ -195,6 +195,7 @@ export function RecognizePage() {
 
 // ───────── Equalizador
 const FREQS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+const FREQ_KEYS = ["eq31", "eq62", "eq125", "eq250", "eq500", "eq1k", "eq2k", "eq4k", "eq8k", "eq16k"] as const;
 interface Profile { id: string; name: string; gains: number[]; preamp: number; auto?: boolean }
 const PRESETS: Profile[] = [
   { id: "flat", name: "Plano", gains: Array(10).fill(0), preamp: 0 },
@@ -204,7 +205,6 @@ const PRESETS: Profile[] = [
   { id: "hd600", name: "Sennheiser HD 600 (AutoEQ)", gains: [5.2, 3.1, 0.8, -0.6, 0.2, 0.4, -1.2, 1.8, -2.4, 0.6], preamp: -5.4, auto: true },
 ];
 const MODELS = ["Sony WH-1000XM4", "Sony WH-1000XM5", "Sennheiser HD 560S", "Sennheiser HD 600", "Sennheiser HD 650", "Bose QuietComfort 45", "Apple AirPods Pro 2", "Beyerdynamic DT 770 Pro", "Audio-Technica ATH-M50x", "Samsung Galaxy Buds2 Pro", "KZ ZSN Pro X", "Moondrop Aria", "HiFiMAN Sundara", "AKG K371", "JBL Tune 510BT"];
-const useEq = create<{ on: boolean; profiles: Profile[]; active: string; set: (p: Partial<{ on: boolean; profiles: Profile[]; active: string }>) => void }>((set) => ({ on: true, profiles: PRESETS, active: "hd600", set }));
 
 function Curve({ gains, on }: { gains: number[]; on: boolean }) {
   const W = 800, H = 220, pad = 10;
@@ -222,49 +222,67 @@ function Curve({ gains, on }: { gains: number[]; on: boolean }) {
   );
 }
 
+function applyProfile(p: Profile) {
+  setSetting("eqOn", true);
+  setSetting("eqPreamp", p.preamp);
+  FREQ_KEYS.forEach((k, i) => setSetting(k, p.gains[i]));
+  toast(`Perfil "${p.name}" aplicado`);
+}
+
 export function EqualizerPage() {
-  const eq = useEq();
   const [wizard, setWizard] = useState(false);
-  const p = eq.profiles.find((x) => x.id === eq.active) ?? eq.profiles[0];
-  const update = (patch: Partial<Profile>) => {
-    // Presets são somente leitura: editar um deles cria uma cópia "Personalizado".
-    if (!p.id.startsWith("c")) { const id = `c${Date.now()}`; return eq.set({ profiles: [...eq.profiles, { ...p, ...patch, id, name: `${p.name} (personalizado)`, auto: false }], active: id }); }
-    eq.set({ profiles: eq.profiles.map((x) => (x.id === p.id ? { ...x, ...patch } : x)) });
+  const on = useSetting<boolean>("eqOn");
+  const preamp = useSetting<number>("eqPreamp");
+  const gains = FREQ_KEYS.map((k) => useSetting<number>(k));
+  const activeId = useRef<string>("flat");
+
+  const p = PRESETS.find((x) => x.id === activeId.current) ?? PRESETS[0];
+
+  const applyAndSelect = (profile: Profile) => {
+    activeId.current = profile.id;
+    applyProfile(profile);
   };
+
   return (
     <div className="px-8 pt-5 pb-10 max-w-[76rem] mx-auto">
       <div className="flex items-center gap-3 mb-6">
         <h1 className="text-[2.1rem] font-bold tracking-tight flex-1">Equalizador</h1>
         <Btn icon={<Wand2 />} onClick={() => setWizard(true)}>Assistente AutoEQ</Btn>
-        <Btn variant="ghost" icon={<FileUp />} onClick={() => { const id = `c${Date.now()}`; eq.set({ profiles: [...eq.profiles, { id, name: "Importado: ParametricEQ.txt", gains: [3, 2, 0, -1, 0, 1, 2, 0, -2, 1], preamp: -3.2 }], active: id }); toast("Perfil importado"); }}>Importar perfil</Btn>
-        <div className="flex items-center gap-2.5 pl-3"><span className={cx("font-medium", !eq.on && "text-t3")}>{eq.on ? "Ativado" : "Desativado"}</span><Switch on={eq.on} onChange={(on) => eq.set({ on })} /></div>
+        <Btn variant="ghost" icon={<FileUp />} onClick={() => {
+          const id = `c${Date.now()}`;
+          const imported: Profile = { id, name: "Importado: ParametricEQ.txt", gains: [3, 2, 0, -1, 0, 1, 2, 0, -2, 1], preamp: -3.2 };
+          PRESETS.push(imported);
+          applyAndSelect(imported);
+          toast("Perfil importado");
+        }}>Importar perfil</Btn>
+        <div className="flex items-center gap-2.5 pl-3"><span className={cx("font-medium", !on && "text-t3")}>{on ? "Ativado" : "Desativado"}</span><Switch on={on} onChange={(v) => setSetting("eqOn", v)} /></div>
       </div>
       <div className="grid grid-cols-[17rem_minmax(0,1fr)] max-[1000px]:grid-cols-1 gap-6">
         <div>
           <div className="text-[0.72rem] font-semibold uppercase tracking-wider text-t3 mb-2 px-1">Perfis</div>
-          <div className="space-y-1">{eq.profiles.map((x) => (
-            <div key={x.id} role="button" onClick={() => eq.set({ active: x.id })} className={cx("group w-full flex items-center gap-3 h-12 px-3 rounded-xl text-left transition-colors", x.id === eq.active ? "bg-accent-soft" : "hover:bg-s2")}>
-              {x.auto ? <Headphones className="size-4.5 text-t3 shrink-0" /> : <SlidersHorizontal className="size-4.5 text-t3 shrink-0" />}<span className={cx("flex-1 truncate font-medium text-[0.9rem]", x.id === eq.active && "text-accent")}>{x.name}</span>
-              {x.id.startsWith("c") && <IconBtn label="Apagar perfil" size={28} className="opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); openDialog("confirm", { title: "Apagar perfil?", text: `Tem certeza de que quer apagar "${x.name}"? Esta ação não pode ser desfeita.`, confirm: "Apagar", danger: true, action: () => eq.set({ profiles: eq.profiles.filter((y) => y.id !== x.id), active: "flat" }) }); }}><Trash2 /></IconBtn>}
+          <div className="space-y-1">{PRESETS.map((x) => (
+            <div key={x.id} role="button" onClick={() => applyAndSelect(x)} className={cx("group w-full flex items-center gap-3 h-12 px-3 rounded-xl text-left transition-colors", x.id === activeId.current ? "bg-accent-soft" : "hover:bg-s2")}>
+              {x.auto ? <Headphones className="size-4.5 text-t3 shrink-0" /> : <SlidersHorizontal className="size-4.5 text-t3 shrink-0" />}<span className={cx("flex-1 truncate font-medium text-[0.9rem]", x.id === activeId.current && "text-accent")}>{x.name}</span>
+              {x.id.startsWith("c") && <IconBtn label="Apagar perfil" size={28} className="opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); openDialog("confirm", { title: "Apagar perfil?", text: `Tem certeza de que quer apagar "${x.name}"? Esta ação não pode ser desfeita.`, confirm: "Apagar", danger: true, action: () => { const idx = PRESETS.findIndex((y) => y.id === x.id); if (idx >= 0) PRESETS.splice(idx, 1); if (activeId.current === x.id) { activeId.current = "flat"; applyProfile(PRESETS[0]); } toast("Perfil apagado"); } }); }}><Trash2 /></IconBtn>}
             </div>))}</div>
         </div>
-        <div className={cx("rounded-3xl bg-s1 p-6 transition-opacity", !eq.on && "opacity-60")}>
-          <div className="flex items-center gap-3 mb-2"><div className="font-semibold text-[1.1rem] flex-1 truncate">{p.name}</div><Btn size="sm" variant="ghost" icon={<RotateCcw />} onClick={() => update({ gains: Array(10).fill(0), preamp: 0 })}>Zerar</Btn></div>
-          <div className="relative"><Curve gains={p.gains} on={eq.on} /><div className="absolute left-1 top-1 text-t3 text-[0.7rem] tnum">+12 dB</div><div className="absolute left-1 bottom-1 text-t3 text-[0.7rem] tnum">−12 dB</div></div>
+        <div className={cx("rounded-3xl bg-s1 p-6 transition-opacity", !on && "opacity-60")}>
+          <div className="flex items-center gap-3 mb-2"><div className="font-semibold text-[1.1rem] flex-1 truncate">{p.name}</div><Btn size="sm" variant="ghost" icon={<RotateCcw />} onClick={() => { FREQ_KEYS.forEach((k) => setSetting(k, 0)); setSetting("eqPreamp", 0); toast("Equalizador zerado"); }}>Zerar</Btn></div>
+          <div className="relative"><Curve gains={gains} on={on} /><div className="absolute left-1 top-1 text-t3 text-[0.7rem] tnum">+12 dB</div><div className="absolute left-1 bottom-1 text-t3 text-[0.7rem] tnum">−12 dB</div></div>
           <div className="grid grid-cols-[repeat(10,minmax(0,1fr))] gap-1 mt-4">
             {FREQS.map((f, i) => (
               <div key={f} className="flex flex-col items-center gap-2 min-w-0">
-                <span className="text-[0.74rem] tnum font-medium text-t2 h-4">{p.gains[i] > 0 ? "+" : ""}{p.gains[i].toFixed(1).replace(".", ",")}</span>
-                <div className="relative h-36 w-6"><Range label={`${f} Hz`} vertical value={p.gains[i]} min={-12} max={12} step={0.5} onChange={(v) => update({ gains: p.gains.map((g, k) => (k === i ? v : g)) })} className="absolute left-1/2 top-1/2 w-36 -translate-x-1/2 -translate-y-1/2 thumb" /></div>
+                <span className="text-[0.74rem] tnum font-medium text-t2 h-4">{gains[i] > 0 ? "+" : ""}{gains[i].toFixed(1).replace(".", ",")}</span>
+                <div className="relative h-36 w-6"><Range label={`${f} Hz`} vertical value={gains[i]} min={-12} max={12} step={0.5} onChange={(v) => setSetting(FREQ_KEYS[i], v)} className="absolute left-1/2 top-1/2 w-36 -translate-x-1/2 -translate-y-1/2 thumb" /></div>
                 <span className="text-[0.72rem] text-t3 tnum">{f >= 1000 ? `${f / 1000}k` : f}</span>
               </div>
             ))}
           </div>
-          <div className="flex items-center gap-4 mt-6 pt-5 border-t border-line"><span className="font-medium w-36">Pré-amplificação</span><Range value={p.preamp} min={-12} max={6} step={0.1} onChange={(v) => update({ preamp: v })} className="flex-1 thumb" /><span className="w-20 text-right tnum text-t2">{p.preamp.toFixed(1).replace(".", ",")} dB</span></div>
-          {p.preamp > 0 && <div className="mt-3 text-warn text-[0.84rem]">Pré-amplificação positiva pode causar distorção em trechos altos.</div>}
+          <div className="flex items-center gap-4 mt-6 pt-5 border-t border-line"><span className="font-medium w-36">Pré-amplificação</span><Range value={preamp} min={-12} max={6} step={0.1} onChange={(v) => setSetting("eqPreamp", v)} className="flex-1 thumb" /><span className="w-20 text-right tnum text-t2">{preamp.toFixed(1).replace(".", ",")} dB</span></div>
+          {preamp > 0 && <div className="mt-3 text-warn text-[0.84rem]">Pré-amplificação positiva pode causar distorção em trechos altos.</div>}
         </div>
       </div>
-      <AnimatePresence>{wizard && <Wizard onClose={() => setWizard(false)} onSave={(names) => { const added = names.map((n, i) => ({ id: `c${Date.now() + i}`, name: `${n} (AutoEQ)`, gains: FREQS.map((_, k) => +(Math.sin(k * 1.3 + n.length + i) * 4).toFixed(1)), preamp: -4.5, auto: true })); eq.set({ profiles: [...eq.profiles, ...added], active: added[0].id }); toast(`${added.length} ${added.length === 1 ? "perfil salvo" : "perfis salvos"}`); }} />}</AnimatePresence>
+      <AnimatePresence>{wizard && <Wizard onClose={() => setWizard(false)} onSave={(names) => { const added = names.map((n, i) => ({ id: `c${Date.now() + i}`, name: `${n} (AutoEQ)`, gains: FREQS.map((_, k) => +(Math.sin(k * 1.3 + n.length + i) * 4).toFixed(1)), preamp: -4.5, auto: true })); added.forEach((a) => PRESETS.push(a)); applyAndSelect(added[0]); toast(`${added.length} ${added.length === 1 ? "perfil salvo" : "perfis salvos"}`); }} />}</AnimatePresence>
     </div>
   );
 }
