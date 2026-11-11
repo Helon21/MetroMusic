@@ -119,6 +119,15 @@ input[type="text"], input[type="search"], input[type="url"], input[type="number"
   background-size: 420px 380px, 380px 420px, 500px 460px, 340px 400px, 460px 360px, 520px 480px, 400px 440px, 360px 380px, 480px 520px, 440px 400px, 100% 100%, 100% 100%;
 }
 
+/* Imagem da Ada (fundo "Ada"): à direita, escurecida à esquerda para o conteúdo continuar legível */
+.bg-ada {
+  background-color: #000;
+  background-image: linear-gradient(to right, #000 0%, #000c 35%, #0006 65%, #0003 100%), url("./assets/backgrounds/ada.webp");
+  background-size: 100% 100%, cover;
+  background-position: center, right center;
+  background-repeat: no-repeat;
+}
+
 @keyframes eq { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1); } }
 .eq-bar { transform-origin: bottom; animation: eq 0.9s ease-in-out infinite; }
 .eq-paused .eq-bar { animation-play-state: paused; }

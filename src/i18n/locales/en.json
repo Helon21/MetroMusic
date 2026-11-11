@@ -5,7 +5,6 @@
   "3 faixas": "3 tracks",
   "5 faixas": "5 tracks",
   "A chave fica só neste computador": "The key stays on this computer only",
-  "A galáxia desenha um céu estrelado estático atrás do conteúdo": "The galaxy draws a static starry sky behind the content",
   "A maioria dos players não lê esse dado": "Most players don't read this data",
   "A música atual some enquanto a próxima entra": "The current song fades out while the next one fades in",
   "AAC 160 kbps (alta)": "AAC 160 kbps (high)",
@@ -740,5 +739,7 @@
   "placa de vídeo em uso": "graphics card in use",
   "taxa de quadros baixa": "low frame rate",
   "escolha do usuário": "user choice",
-  "lentidão numa execução anterior": "slowness in a previous run"
+  "lentidão numa execução anterior": "slowness in a previous run",
+  "A galáxia desenha um céu estrelado estático atrás do conteúdo; Ada mostra a imagem da personagem": "The galaxy draws a static starry sky behind the content; Ada shows the character artwork",
+  "Ada": "Ada"
 }

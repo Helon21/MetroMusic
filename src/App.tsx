@@ -96,7 +96,7 @@ function Shell() {
   useClock(); useShortcuts();
   const crash = useUI((s) => s.crash);
   const route = useRoute(), idx = useUI((s) => s.idx);
-  const galaxy = useSetting<string>("appBackground") === "galaxy";
+  const bg = useSetting<string>("appBackground");
   // trocar o idioma refaz a árvore inteira (as peças compartilhadas traduzem ao desenhar)
   const lang = resolveLang(useSetting<string>("appLanguage"));
   useEffect(() => { document.documentElement.lang = lang; }, [lang]);
@@ -118,7 +118,7 @@ function Shell() {
 
   return (
     <MotionConfig reducedMotion={reduce ? "always" : "user"}>
-      <div key={lang} className={cx("h-full flex flex-col", galaxy && "galaxy")}>
+      <div key={lang} className={cx("h-full flex flex-col", bg === "galaxy" && "galaxy", bg === "ada" && "bg-ada")}>
         <div className="flex-1 min-h-0 flex">
           <Sidebar />
           <div className="flex-1 min-w-0 flex flex-col relative">

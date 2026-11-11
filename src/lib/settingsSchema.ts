@@ -51,7 +51,7 @@ export const PAGES: Page[] = [
       custom("themeMode"),
       tg("pureBlack", "Preto puro", false, "Fundo totalmente preto, ideal para telas OLED"),
       custom("palette"),
-      sel("appBackground", "Fundo do app", "theme", [["theme", "Cor do tema"], ["galaxy", "Galáxia"]], "A galáxia desenha um céu estrelado estático atrás do conteúdo"),
+      sel("appBackground", "Fundo do app", "theme", [["theme", "Cor do tema"], ["galaxy", "Galáxia"], ["ada", "Ada"]], "A galáxia desenha um céu estrelado estático atrás do conteúdo; Ada mostra a imagem da personagem"),
     ] },
     { title: "Layout", items: [
       sel("density", "Densidade", "comfortable", [["compact", "Compacta"], ["comfortable", "Confortável"], ["spacious", "Espaçosa"]]),
@@ -65,7 +65,7 @@ export const PAGES: Page[] = [
       tg("reduceMotion", "Reduzir animações", false, "Troca transições por fades rápidos"),
     ] },
     { title: "Player", items: [
-      sel("playerBackground", "Fundo do Tocando agora", "movingBlur", [["solid", "Sólido"], ["gradient", "Gradiente"], ["blur", "Desfoque"], ["movingBlur", "Desfoque em movimento"], ["galaxy", "Galáxia"], ["galaxyBlur", "Galáxia com desfoque"]]),
+      sel("playerBackground", "Fundo do Tocando agora", "movingBlur", [["solid", "Sólido"], ["gradient", "Gradiente"], ["blur", "Desfoque"], ["movingBlur", "Desfoque em movimento"], ["galaxy", "Galáxia"], ["galaxyBlur", "Galáxia com desfoque"], ["ada", "Ada"]]),
       custom("perfStatus"),
       sel("visualPerformance", "Desempenho visual", "auto", [["auto", "Automático (recomendado)"], ["full", "Completo"], ["low", "Leve"]], "Automático liga o modo leve sozinho em PCs sem placa de vídeo ou quando o app fica lento. Leve desliga desfoques, sombras grandes, animações decorativas e vídeos de fundo."),
       sel("playerButtons", "Cor dos botões do player", "default", [["default", "Padrão"], ["primary", "Cor primária"], ["tertiary", "Cor terciária"]]),

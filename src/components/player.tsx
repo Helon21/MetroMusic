@@ -345,6 +345,7 @@ function Backdrop({ t }: { t: Track }) {
         </AnimatePresence>
       )}
       {(mode === "galaxy" || mode === "galaxyBlur") && <div className={cx("absolute inset-0 galaxy transition-opacity duration-700", mode === "galaxyBlur" && "mix-blend-screen")} style={{ ["--h" as any]: t.hue, opacity: galaxyOpacity }} />}
+      {mode === "ada" && <div className="absolute inset-0 bg-ada" />}
       {/* "Dissolver a capa animada no fundo": o vídeo do Canvas, desfocado, atrás de tudo */}
       {fade && canvasBg && mode !== "solid" && <video key={canvasBg} src={canvasBg} autoPlay loop muted playsInline data-canvas-bg className="absolute inset-0 size-full object-cover opacity-70 blur-2xl scale-125 animate-[fade_1s_ease]" />}
       {mode !== "solid" && <div className="absolute inset-0 bg-black/45" />}
